@@ -3,6 +3,7 @@ WORKDIR /app
 
 # Copy the full workspace — all members must be present for Cargo to load the workspace.
 COPY Cargo.toml ./
+COPY Cargo.lock ./
 COPY crates/ ./crates/
 COPY audio-fetcher-rs/ ./audio-fetcher-rs/
 COPY audio-converter-rs/ ./audio-converter-rs/

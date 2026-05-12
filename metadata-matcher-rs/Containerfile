@@ -1,7 +1,8 @@
-FROM docker.io/library/rust:1.85-bookworm AS build
+FROM docker.io/library/rust:1.86-bookworm AS build
 WORKDIR /ws
 
 COPY Cargo.toml /ws/Cargo.toml
+COPY Cargo.lock /ws/Cargo.lock
 COPY crates /ws/crates
 COPY metadata-matcher-rs /ws/metadata-matcher-rs
 

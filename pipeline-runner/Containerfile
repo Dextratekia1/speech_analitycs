@@ -1,6 +1,7 @@
 FROM docker.io/library/rust:1.86-bookworm AS build_rust
 WORKDIR /ws
 COPY ./Cargo.toml /ws/Cargo.toml
+COPY ./Cargo.lock /ws/Cargo.lock
 COPY ./crates /ws/crates
 COPY ./audio-fetcher-rs /ws/audio-fetcher-rs
 COPY ./audio-converter-rs /ws/audio-converter-rs
@@ -10,9 +11,8 @@ RUN cargo build -p audio-fetcher-rs -p audio-converter-rs -p metadata-matcher-rs
 
 FROM docker.io/library/golang:1.22-bookworm AS build_go
 WORKDIR /src
-ENV GOFLAGS=-mod=mod
+ENV GOFLAGS=-mod=readonly
 COPY ./audio-uploader-go /src
-RUN go mod tidy
 RUN CGO_ENABLED=0 go build -o /out/audio-uploader-go ./cmd/audio-uploader-go
 
 FROM docker.io/library/debian:bookworm-slim

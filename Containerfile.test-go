@@ -4,8 +4,7 @@ COPY audio-uploader-go/ ./audio-uploader-go/
 WORKDIR /app/audio-uploader-go
 
 # go.sum is not committed to the repo (generated at build time per project convention).
-ENV GOFLAGS=-mod=mod
-RUN go mod tidy
+ENV GOFLAGS=-mod=readonly
 
 # Pre-compile test binaries without running any tests.
 RUN go test ./... -run TestDoesNotExist
