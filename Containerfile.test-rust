@@ -1,0 +1,18 @@
+FROM docker.io/library/rust:1.86-bookworm
+WORKDIR /app
+
+# Copy the full workspace — all members must be present for Cargo to load the workspace.
+COPY Cargo.toml ./
+COPY crates/ ./crates/
+COPY audio-fetcher-rs/ ./audio-fetcher-rs/
+COPY audio-converter-rs/ ./audio-converter-rs/
+COPY metadata-matcher-rs/ ./metadata-matcher-rs/
+COPY pipeline-runner/ ./pipeline-runner/
+
+# Pre-compile test binaries at image build time to keep `podman run` fast.
+# Package names:
+#   crates/common/Cargo.toml  → name = "audios_common"
+#   metadata-matcher-rs/Cargo.toml → name = "metadata-matcher-rs"
+RUN cargo test -p audios_common -p metadata-matcher-rs --no-run
+
+CMD ["cargo", "test", "-p", "audios_common", "-p", "metadata-matcher-rs", "--", "--nocapture"]

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "client": { "id": 59, "code": "maf" },
+  "audio": {
+    "record_id": "CID99999_extra_987654321_20260108_143022_7",
+    "source_filename": null,
+    "raw_path": null,
+    "wav_path": null
+  },
+  "call": {
+    "tipo": 2,
+    "telefono": "987654321",
+    "id_agente": 7,
+    "cid_llamada": "CID99999",
+    "anexo": null,
+    "parse_ok": true,
+    "fecha_gestion": "2026-01-08",
+    "hora": "14:30:22",
+    "fecha_gestion_parse": "2026-01-08 14:30:22"
+  },
+  "agent": { "nombre_agente": "Agente Maf Prueba" },
+  "probe": { "ffprobe_ok": true, "duration_sec": 62.5 },
+  "lookup": { "ok": true },
+  "rpta": { "descrip_rpta": "PAGO REALIZADO" },
+  "data": {
+    "n_cuota": 5,
+    "concatenado": "MAF-20260108",
+    "fec_vencimiento": "2026-01-15",
+    "moneda": 1,
+    "monto_cuota": 250.0,
+    "ultimo_tramo": "SI",
+    "categoria": "A",
+    "placa": "TESTPL",
+    "documento": "DOC-00001",
+    "deudor": "Deudor MAF Prueba",
+    "nid_opecodout": "NID-001",
+    "nombre_rpta": "ACEPTA",
+    "observacion": "ok",
+    "fec_comp": "2026-02-01",
+    "monto_comp_soles": 100.0,
+    "monto_comp_dolares": 25.0
+  }
+}

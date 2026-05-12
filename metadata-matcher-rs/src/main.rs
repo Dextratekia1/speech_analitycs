@@ -557,3 +557,214 @@ async fn main() -> Result<()> {
     println!("run_dir={}", run_dir.display());
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper to reduce tuple construction verbosity in test inputs.
+    fn row(k: i32, tipo: u8, id_agente: i32, tel: &str, fecha: &str, cid: Option<&str>)
+        -> (i32, u8, i32, String, String, Option<String>)
+    {
+        (k, tipo, id_agente, tel.to_string(), fecha.to_string(), cid.map(|s| s.to_string()))
+    }
+
+    // --- single-row generation ---
+
+    #[test]
+    fn test_single_row_table_created() {
+        let inputs = vec![row(0, 1, 42, "987654321", "2026-01-08 14:30:22", None)];
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[1001], "-- tail", &inputs);
+        assert!(sql.contains("SET NOCOUNT ON"), "should emit SET NOCOUNT ON");
+        assert!(sql.contains("CREATE TABLE #temporal"), "should create #temporal temp table");
+        assert!(sql.contains("INSERT INTO #temporal"), "should have an INSERT statement");
+    }
+
+    #[test]
+    fn test_single_row_values() {
+        let inputs = vec![row(0, 1, 42, "987654321", "2026-01-08 14:30:22", None)];
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[1001], "-- tail", &inputs);
+        // Row format: ({k}, {tipo}, {id_agente}, '{telefono}', '{fecha_gestion}', {cid_sql})
+        assert!(
+            sql.contains("(0, 1, 42, '987654321', '2026-01-08 14:30:22', NULL)"),
+            "single row should appear with correct values; got:\n{sql}"
+        );
+    }
+
+    #[test]
+    fn test_single_row_ends_with_semicolon() {
+        // Last (and only) row in a chunk ends with ';', not ','
+        let inputs = vec![row(0, 1, 1, "987654321", "2026-01-08 14:30:22", None)];
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[1], "-- tail", &inputs);
+        assert!(
+            sql.contains("NULL);\n"),
+            "single row should end its VALUES block with ';'"
+        );
+    }
+
+    // --- tail placeholder substitution ---
+
+    #[test]
+    fn test_tail_substitutions_all_placeholders() {
+        let inputs = vec![row(0, 1, 1, "987654321", "2026-01-08 14:30:22", None)];
+        let tail = "W={{WINDOW_SEC}} C={{CLIENT_ID}} D={{DATE}} L={{CARTERAS_LIST}}";
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[10, 20], tail, &inputs);
+        assert!(sql.contains("W=300"), "{{WINDOW_SEC}} should be replaced with 300");
+        assert!(sql.contains("C=52"), "{{CLIENT_ID}} should be replaced with 52");
+        assert!(sql.contains("D=2026-01-08"), "{{DATE}} should be replaced with date string");
+        assert!(sql.contains("L=10,20"), "{{CARTERAS_LIST}} should be comma-joined integers");
+    }
+
+    // --- chunk boundary ---
+
+    #[test]
+    fn test_chunk_boundary_900_rows_one_insert() {
+        // INSERT_CHUNK = 900: exactly 900 rows → exactly 1 INSERT block
+        let inputs: Vec<_> = (0..900)
+            .map(|i| row(i, 1, 1, "987654321", "2026-01-08 14:30:22", None))
+            .collect();
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[1], "-- tail", &inputs);
+        let count = sql.matches("INSERT INTO #temporal").count();
+        assert_eq!(count, 1, "900 rows should produce exactly 1 INSERT chunk, got {count}");
+    }
+
+    #[test]
+    fn test_chunk_boundary_901_rows_two_inserts() {
+        // 901 rows → 2 INSERT blocks (900 + 1)
+        let inputs: Vec<_> = (0..901)
+            .map(|i| row(i, 1, 1, "987654321", "2026-01-08 14:30:22", None))
+            .collect();
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[1], "-- tail", &inputs);
+        let count = sql.matches("INSERT INTO #temporal").count();
+        assert_eq!(count, 2, "901 rows should produce exactly 2 INSERT chunks, got {count}");
+    }
+
+    // --- single-quote escaping ---
+
+    #[test]
+    fn test_single_quote_escaping_in_telefono() {
+        // A literal ' in telefono must become '' in generated SQL (SQL escaping, not backslash).
+        let inputs = vec![row(0, 1, 1, "it's_test", "2026-01-08 14:30:22", None)];
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[1], "-- tail", &inputs);
+        assert!(
+            sql.contains("'it''s_test'"),
+            "single quote in telefono must be doubled; got:\n{sql}"
+        );
+    }
+
+    #[test]
+    fn test_single_quote_escaping_in_cid_llamada() {
+        // A literal ' in cid_llamada must become '' in generated SQL.
+        let inputs = vec![row(0, 2, 1, "987654321", "2026-01-08 14:30:22", Some("CID'123"))];
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[1], "-- tail", &inputs);
+        assert!(
+            sql.contains("'CID''123'"),
+            "single quote in cid_llamada must be doubled; got:\n{sql}"
+        );
+    }
+
+    // --- empty carteras ---
+
+    #[test]
+    fn test_empty_carteras_substitutes_null_string() {
+        // Empty slice → "NULL" is substituted for {{CARTERAS_LIST}} in the tail.
+        // Note: the function substitutes the literal string "NULL", not SQL NULL.
+        // The tail template is responsible for using it appropriately (e.g. IN (NULL)).
+        let inputs = vec![row(0, 1, 1, "987654321", "2026-01-08 14:30:22", None)];
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[], "LIST={{CARTERAS_LIST}}", &inputs);
+        assert!(
+            sql.contains("LIST=NULL"),
+            "empty carteras must substitute the string NULL into the tail placeholder"
+        );
+    }
+
+    // --- tipo 1 and tipo 2 ---
+
+    #[test]
+    fn test_tipo1_cid_llamada_is_null() {
+        // tipo 1 rows use None cid → cid_llamada value is NULL (unquoted SQL keyword)
+        let inputs = vec![row(0, 1, 42, "987654321", "2026-01-08 14:30:22", None)];
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[1], "-- tail", &inputs);
+        assert!(
+            sql.contains("(0, 1, 42, '987654321', '2026-01-08 14:30:22', NULL)"),
+            "tipo 1 with None cid should emit NULL in cid_llamada position"
+        );
+    }
+
+    #[test]
+    fn test_tipo2_cid_llamada_is_quoted() {
+        // tipo 2 rows use Some cid → cid_llamada value is a quoted SQL string
+        let inputs = vec![row(0, 2, 7, "987654321", "2026-01-08 15:00:00", Some("CID12345"))];
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[1], "-- tail", &inputs);
+        assert!(
+            sql.contains("(0, 2, 7, '987654321', '2026-01-08 15:00:00', 'CID12345')"),
+            "tipo 2 with Some cid should emit a quoted cid_llamada"
+        );
+    }
+
+    // --- fecha_gestion datetime format ---
+
+    #[test]
+    fn test_fecha_gestion_quoted_as_datetime_string() {
+        // fecha_gestion is pre-formatted as "YYYY-MM-DD HH:MM:SS" by the caller
+        // (via format_naive_dt_sql). This test documents that the function wraps it in
+        // single quotes and does not reformat it.
+        let inputs = vec![row(0, 1, 1, "987654321", "2026-01-08 14:30:22", None)];
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[1], "-- tail", &inputs);
+        assert!(
+            sql.contains("'2026-01-08 14:30:22'"),
+            "fecha_gestion should appear quoted as 'YYYY-MM-DD HH:MM:SS'"
+        );
+    }
+
+    // --- zero inputs ---
+
+    #[test]
+    fn test_zero_inputs_no_insert_generated() {
+        // Empty inputs → chunks iterator is empty → no INSERT statement emitted.
+        // Table creation and tail substitution still occur.
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[1], "-- tail sentinel", &[]);
+        assert!(
+            !sql.contains("INSERT INTO #temporal"),
+            "zero inputs should produce no INSERT statement"
+        );
+        assert!(
+            sql.contains("CREATE TABLE #temporal"),
+            "table creation should appear even with zero inputs"
+        );
+        assert!(
+            sql.contains("-- tail sentinel"),
+            "tail should still be appended with zero inputs"
+        );
+    }
+
+    // --- multiple carteras ---
+
+    #[test]
+    fn test_multiple_carteras_comma_joined_no_parens() {
+        // Non-empty carteras: joined with ',' and no surrounding parentheses.
+        // The tail template is responsible for wrapping in IN (...) if needed.
+        let inputs = vec![row(0, 1, 1, "987654321", "2026-01-08 14:30:22", None)];
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[100, 200, 300], "L={{CARTERAS_LIST}}", &inputs);
+        assert!(
+            sql.contains("L=100,200,300"),
+            "multiple carteras should be comma-joined without parentheses"
+        );
+    }
+
+    // --- row separator within chunk ---
+
+    #[test]
+    fn test_multi_row_separators() {
+        // Within a single INSERT block: intermediate rows end with ',', last with ';'
+        let inputs = vec![
+            row(0, 1, 1, "987654321", "2026-01-08 14:30:22", None),
+            row(1, 1, 2, "987654322", "2026-01-08 14:31:00", None),
+        ];
+        let sql = build_batch_sql("2026-01-08", 52, 300, &[1], "-- tail", &inputs);
+        let insert_pos = sql.find("INSERT INTO #temporal").unwrap();
+        let after_insert = &sql[insert_pos..];
+        assert!(after_insert.contains(",\n"), "intermediate rows should end with ','");
+        assert!(after_insert.contains(";\n"), "last row should end with ';'");
+    }
+}
