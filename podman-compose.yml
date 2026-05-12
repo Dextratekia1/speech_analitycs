@@ -1,0 +1,68 @@
+services:
+  audio-fetcher-rs:
+    build:
+      context: .
+      dockerfile: audio-fetcher-rs/Containerfile
+    image: localhost/audios-natura/audio-fetcher-rs:dev
+    volumes:
+      - ./shared:/shared:Z
+    environment:
+      - RUST_LOG=info
+    command: ["--help"]
+  
+  audio-converter-rs:
+    build:
+      context: .
+      dockerfile: audio-converter-rs/Containerfile
+    image: localhost/audios-natura/audio-converter-rs:dev
+    volumes:
+      - ./shared:/shared:Z
+    environment:
+      - RUST_LOG=info
+    command: ["--help"]
+  
+  metadata-matcher-rs:
+    build:
+      context: .
+      dockerfile: metadata-matcher-rs/Containerfile
+    image: localhost/audios-natura/metadata-matcher-rs:dev
+    volumes:
+      - ./shared:/shared:Z
+    secrets:
+      - mssql-env-v2
+    environment:
+      - RUST_LOG=info
+    command: ["--help"]
+  
+  audio-uploader-go:
+    build:
+      context: .
+      dockerfile: audio-uploader-go/Containerfile
+    image: localhost/audios-natura/audio-uploader-go:dev
+    volumes:
+      - ./shared:/shared:Z
+    secrets:
+      - sftp-env
+    environment:
+      - LOG_LEVEL=info
+    command: ["--help"]
+  
+  pipeline-runner:
+    build:
+      context: .
+      dockerfile: pipeline-runner/Containerfile
+    image: localhost/audios-natura/pipeline-runner:dev
+    volumes:
+      - ./shared:/shared:Z
+    secrets:
+      - mssql-env-v2
+      - sftp-env
+    environment:
+      - RUST_LOG=info
+    command: ["--help"]
+
+secrets:
+  mssql-env-v2:
+    external: true
+  sftp-env:
+    external: true

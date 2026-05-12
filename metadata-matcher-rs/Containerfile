@@ -1,0 +1,18 @@
+FROM docker.io/library/rust:1.85-bookworm AS build
+WORKDIR /ws
+
+COPY Cargo.toml /ws/Cargo.toml
+COPY crates /ws/crates
+COPY metadata-matcher-rs /ws/metadata-matcher-rs
+
+# Cargo workspace: all members must exist so Cargo can load the workspace.
+COPY audio-fetcher-rs /ws/audio-fetcher-rs
+COPY audio-converter-rs /ws/audio-converter-rs
+COPY pipeline-runner /ws/pipeline-runner
+
+RUN cargo build -p metadata-matcher-rs --release
+
+FROM docker.io/library/debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
+COPY --from=build /ws/target/release/metadata-matcher-rs /usr/local/bin/metadata-matcher-rs
+ENTRYPOINT ["metadata-matcher-rs"]

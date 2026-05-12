@@ -1,0 +1,18 @@
+FROM docker.io/library/rust:1.86-bookworm AS build
+WORKDIR /ws
+
+COPY Cargo.toml /ws/Cargo.toml
+COPY crates /ws/crates
+COPY audio-converter-rs /ws/audio-converter-rs
+
+# Cargo workspace: all members must exist so Cargo can load the workspace.
+COPY audio-fetcher-rs /ws/audio-fetcher-rs
+COPY metadata-matcher-rs /ws/metadata-matcher-rs
+COPY pipeline-runner /ws/pipeline-runner
+
+RUN cargo build -p audio-converter-rs --release
+
+FROM docker.io/library/debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
+COPY --from=build /ws/target/release/audio-converter-rs /usr/local/bin/audio-converter-rs
+ENTRYPOINT ["audio-converter-rs"]

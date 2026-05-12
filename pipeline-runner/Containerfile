@@ -1,0 +1,25 @@
+FROM docker.io/library/rust:1.86-bookworm AS build_rust
+WORKDIR /ws
+COPY ./Cargo.toml /ws/Cargo.toml
+COPY ./crates /ws/crates
+COPY ./audio-fetcher-rs /ws/audio-fetcher-rs
+COPY ./audio-converter-rs /ws/audio-converter-rs
+COPY ./metadata-matcher-rs /ws/metadata-matcher-rs
+COPY ./pipeline-runner /ws/pipeline-runner
+RUN cargo build -p audio-fetcher-rs -p audio-converter-rs -p metadata-matcher-rs -p pipeline-runner --release
+
+FROM docker.io/library/golang:1.22-bookworm AS build_go
+WORKDIR /src
+ENV GOFLAGS=-mod=mod
+COPY ./audio-uploader-go /src
+RUN go mod tidy
+RUN CGO_ENABLED=0 go build -o /out/audio-uploader-go ./cmd/audio-uploader-go
+
+FROM docker.io/library/debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
+COPY --from=build_rust /ws/target/release/audio-fetcher-rs /usr/local/bin/audio-fetcher-rs
+COPY --from=build_rust /ws/target/release/audio-converter-rs /usr/local/bin/audio-converter-rs
+COPY --from=build_rust /ws/target/release/metadata-matcher-rs /usr/local/bin/metadata-matcher-rs
+COPY --from=build_rust /ws/target/release/pipeline-runner /usr/local/bin/pipeline-runner
+COPY --from=build_go /out/audio-uploader-go /usr/local/bin/audio-uploader-go
+ENTRYPOINT ["pipeline-runner"]

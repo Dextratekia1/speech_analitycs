@@ -1,0 +1,48 @@
+version: 1
+
+client:
+  id: 52
+  code: natura
+  name: Natura
+
+agents:
+  file: "/shared/config/agents.yml"
+
+rpta_opecodout:
+  file: "/shared/config/rpta_opecodout.yml"
+
+fetch:
+  base_url_template: "http://192.168.100.60/audios/{client}/"
+  sources:
+    - "OCM-MANUAL-{YYYY}/{MM}/{DD}"
+    - "OCM-PREDICTIVO-{YYYY}/{MM}/{DD}"
+    - "entrantes{YYYY}/{YYYYMM}/{DD}"
+    - "manuales{YYYY}/{YYYYMM}/{DD}"
+  extensions: ["gsm"]
+
+match:
+  window_sec_tipo1: 600
+  carteras_sql: |
+    SELECT DISTINCT op.nid_cartera
+    FROM av_docxcobrarope op WITH (READUNCOMMITTED)
+    WHERE op.nId_Cliente = {{CLIENT_ID}}
+      AND CONVERT(date, op.dDocCobOpe_FecIni) = '{{DATE}}';
+
+  batch_lookup:
+    dialect: mssql
+    tail_sql_file: "/shared/config/natura/batch_lookup.yml"
+
+json:
+  version: 1
+  fields:
+    - { key: "codigo_deudor", col: "COD_DEUDOR", type: "string" }
+    - { key: "ciclo", col: "CICLO", type: "string" }
+    - { key: "dias_atraso", col: "DIAS_ATRASO", type: "int" }
+    - { key: "deuda_total", col: "SALDO_CORREGIDO", type: "decimal" }
+    - { key: "monto_campana", col: "MONTO_MIN_PAGAR_CAMPANA", type: "decimal" }
+    - { key: "nombre_deudor", col: "DEUDOR", type: "string" }
+    - { key: "monto_compromiso", col: "MONTO_COMP_SOLES", type: "decimal" }
+    - { key: "fecha_compromiso", col: "FEC_COMP_PAGO", type: "datetime_string" }
+    - { key: "nombre_rpta", col: "NOMBRE_RPTA", type: "string" }
+    - { key: "observacion", col: "OBSERVACION", type: "string" }
+    - { key: "nid_opecodout", col: "NID_OPECODOUT", type: "int" }

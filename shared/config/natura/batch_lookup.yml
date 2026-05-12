@@ -1,0 +1,73 @@
+version: 2
+dialect: mssql
+# Placeholders: {{WINDOW_SEC}} {{CLIENT_ID}} {{DATE}} {{CARTERAS_LIST}}
+tail_sql: |
+  ;WITH T1 AS (
+    SELECT
+      t.k,
+      dc.cPers_CodCliente                                   AS COD_DEUDOR,
+      dp.cDocParam27                                        AS CICLO,
+      dc.nDoc_DiasAtrazo                                    AS DIAS_ATRASO,
+      TRY_CONVERT(float, dc.nDoc_ImpSaldo)                  AS SALDO_CORREGIDO,
+      TRY_CONVERT(float, dp.cDocParam43)                    AS MONTO_MIN_PAGAR_CAMPANA,
+      pd.cPers_Nombres + ' ' + pd.cPers_ApePat + ' ' + pd.cPers_ApeMat AS DEUDOR,
+      TRY_CONVERT(float, op.monto_comp)                     AS MONTO_COMP_SOLES,
+      CONVERT(varchar(19), op.dFechCompromisoPago, 120)     AS FEC_COMP_PAGO,
+      ou.cNombre_OpeCodCliOut                               AS NOMBRE_RPTA,
+      op.cDocOpeCobOut_Descr                                AS OBSERVACION,
+      op.nId_OpeCodOut                                      AS NID_OPECODOUT
+    FROM #temporal t
+    JOIN av_docxcobrarope op  WITH (READUNCOMMITTED)
+         ON t.tipo = 1
+        AND t.id_agente = op.nId_UsuOpe
+        AND t.telefono  = op.nTelef_Nro
+        AND op.dDocCobOpe_FecIni BETWEEN DATEADD(SECOND, -{{WINDOW_SEC}}, t.fecha_gestion)
+                                    AND DATEADD(SECOND,  {{WINDOW_SEC}}, t.fecha_gestion)
+        AND op.nId_Cliente = {{CLIENT_ID}}
+        AND CONVERT(date, op.dDocCobOpe_FecIni) = '{{DATE}}'
+        AND op.nid_cartera IN ({{CARTERAS_LIST}})
+    JOIN av_docxcobrar dc      WITH (READUNCOMMITTED) ON dc.nId_DocxCobrar = op.nId_DocxCobrar
+    JOIN av_docxcobrarParam dp WITH (READUNCOMMITTED) ON dp.nId_DocxCobrar = dc.nId_DocxCobrar
+    JOIN av_OpeCodCliOut ou    WITH (READUNCOMMITTED) ON ou.nId_OpeCodCliOut = op.nId_OpeCodOut
+    JOIN av_PersDeudor pd      WITH (READUNCOMMITTED) ON pd.nId_PersDeudor = op.nId_PersDeudor
+  ),
+  T2 AS (
+    SELECT
+      t.k,
+      dc.cPers_CodCliente                                   AS COD_DEUDOR,
+      dp.cDocParam27                                        AS CICLO,
+      dc.nDoc_DiasAtrazo                                    AS DIAS_ATRASO,
+      TRY_CONVERT(float, dc.nDoc_ImpSaldo)                  AS SALDO_CORREGIDO,
+      TRY_CONVERT(float, dp.cDocParam43)                    AS MONTO_MIN_PAGAR_CAMPANA,
+      pd.cPers_Nombres + ' ' + pd.cPers_ApePat + ' ' + pd.cPers_ApeMat AS DEUDOR,
+      TRY_CONVERT(float, op.monto_comp)                     AS MONTO_COMP_SOLES,
+      CONVERT(varchar(19), op.dFechCompromisoPago, 120)     AS FEC_COMP_PAGO,
+      ou.cNombre_OpeCodCliOut                               AS NOMBRE_RPTA,
+      op.cDocOpeCobOut_Descr                                AS OBSERVACION,
+      op.nId_OpeCodOut                                      AS NID_OPECODOUT
+    FROM #temporal t
+    JOIN av_docxcobrarope op  WITH (READUNCOMMITTED)
+         ON t.tipo = 2
+        AND t.id_agente = op.nId_UsuOpe
+        AND t.telefono  = op.nTelef_Nro
+        AND t.cid_llamada = op.cID_Llamada
+        AND op.nId_Cliente = {{CLIENT_ID}}
+        AND CONVERT(date, op.dDocCobOpe_FecIni) = '{{DATE}}'
+        AND op.nid_cartera IN ({{CARTERAS_LIST}})
+    JOIN av_docxcobrar dc      WITH (READUNCOMMITTED) ON dc.nId_DocxCobrar = op.nId_DocxCobrar
+    JOIN av_docxcobrarParam dp WITH (READUNCOMMITTED) ON dp.nId_DocxCobrar = dc.nId_DocxCobrar
+    JOIN av_OpeCodCliOut ou    WITH (READUNCOMMITTED) ON ou.nId_OpeCodCliOut = op.nId_OpeCodOut
+    JOIN av_PersDeudor pd      WITH (READUNCOMMITTED) ON pd.nId_PersDeudor = op.nId_PersDeudor
+  )
+  SELECT
+    k, COD_DEUDOR, CICLO, DIAS_ATRASO, SALDO_CORREGIDO,
+    MONTO_MIN_PAGAR_CAMPANA, DEUDOR, MONTO_COMP_SOLES, FEC_COMP_PAGO,
+    NOMBRE_RPTA, OBSERVACION, NID_OPECODOUT
+  FROM T1
+  UNION ALL
+  SELECT
+    k, COD_DEUDOR, CICLO, DIAS_ATRASO, SALDO_CORREGIDO,
+    MONTO_MIN_PAGAR_CAMPANA, DEUDOR, MONTO_COMP_SOLES, FEC_COMP_PAGO,
+    NOMBRE_RPTA, OBSERVACION, NID_OPECODOUT
+  FROM T2
+  ORDER BY k;

@@ -1,0 +1,30 @@
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# Real credential files must never be committed.
+# Only *.env.example files are tracked.
+secrets/*.env
+!secrets/*.env.example
+
+# ── Runtime artifacts ────────────────────────────────────────────────────────
+# shared/runs/ is a large, PII-bearing runtime directory (audio files, matched
+# JSON with debtor names/phones/financial data).  It is mounted into containers
+# at runtime and must not enter version control.
+shared/runs/
+
+# Operational logs written by run_range*.sh scripts.
+logs/
+
+# ── Audio files ───────────────────────────────────────────────────────────────
+# GSM source files and converted WAV files are binary runtime artifacts.
+*.gsm
+*.wav
+
+# ── Archives ─────────────────────────────────────────────────────────────────
+# ZIP archives may contain credentials or PII snapshots.
+*.zip
+
+# ── Build artifacts ───────────────────────────────────────────────────────────
+target/
+audio-uploader-go/bin/
+
+# ── Editor / tooling directories ─────────────────────────────────────────────
+NvChad/

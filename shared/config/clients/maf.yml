@@ -1,0 +1,53 @@
+version: 1
+
+client:
+  id: 59
+  code: maf
+  name: MAF
+
+agents:
+  file: "/shared/config/agents.yml"
+
+rpta_opecodout:
+  file: "/shared/config/rpta_opecodout.yml"
+
+fetch:
+  base_url_template: "http://192.168.100.60/audios/{client}/"
+  sources:
+    - "OCM-MANUAL-{YYYY}/{MM}/{DD}"
+    - "OCM-PREDICTIVO-{YYYY}/{MM}/{DD}"
+    - "entrantes{YYYY}/{YYYYMM}/{DD}"
+    - "manuales{YYYY}/{YYYYMM}/{DD}"
+  extensions: ["gsm"]
+
+match:
+  window_sec_tipo1: 600
+  carteras_sql: |
+    SELECT DISTINCT op.nid_cartera
+    FROM av_docxcobrarope op WITH (READUNCOMMITTED)
+    WHERE op.nId_Cliente = {{CLIENT_ID}}
+      AND CONVERT(date, op.dDocCobOpe_FecIni) = '{{DATE}}';
+
+  batch_lookup:
+    dialect: mssql
+    tail_sql_file: "/shared/config/maf/batch_lookup.yml"
+
+json:
+  version: 1
+  fields:
+    - { key: "n_cuota", col: "N_CUOTA", type: "string" }
+    - { key: "concatenado", col: "CONCATENADO", type: "string" }
+    - { key: "fec_vencimiento", col: "FEC_VENCIMIENTO", type: "date_string" }
+    - { key: "moneda", col: "MONEDA", type: "int" }
+    - { key: "monto_cuota", col: "MONTO_CUOTA", type: "decimal" }
+    - { key: "ultimo_tramo", col: "ULTIMO_TRAMO", type: "string" }
+    - { key: "categoria", col: "CATEGORIA", type: "string" }
+    - { key: "placa", col: "PLACA", type: "string" }
+    - { key: "fec_comp", col: "FEC_COMP", type: "datetime_string" }
+    - { key: "monto_comp_soles", col: "MONTO_COMP_SOLES", type: "decimal" }
+    - { key: "monto_comp_dolares", col: "MONTO_COMP_DOLARES", type: "decimal" }
+    - { key: "nombre_rpta", col: "NOMBRE_RPTA", type: "string" }
+    - { key: "observacion", col: "OBSERVACION", type: "string" }
+    - { key: "documento", col: "DOCUMENTO", type: "string" }
+    - { key: "nid_opecodout", col: "NID_OPECODOUT", type: "int" }
+    - { key: "deudor", col: "DEUDOR", type: "string" }

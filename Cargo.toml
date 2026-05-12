@@ -1,0 +1,9 @@
+[workspace]
+members = [
+  "crates/common",
+  "audio-fetcher-rs",
+  "audio-converter-rs",
+  "metadata-matcher-rs",
+  "pipeline-runner",
+]
+resolver = "2"
