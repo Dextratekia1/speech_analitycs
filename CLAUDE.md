@@ -206,8 +206,13 @@ Config: `/shared/config/clients/{client}.yml`
 - `pipeline.json` is always written before `pipeline-runner` exits, whether the pipeline
   succeeded or failed.
 - `PipelineStage.status` must use only: `pending`, `ok`, `failed`, `skipped`.
-- `PipelineReport.status` must use only: `ok`, `failed`.
-- `run_dir=<path>` is printed to stdout only on full pipeline success.
+- `PipelineReport.status` must use only: `ok`, `failed`, `partial`.
+- `run_dir=<path>` is printed to stdout only on full pipeline success or `partial` status (all stages exit 0).
+- `PipelineReport.status` is `partial` when all stages succeed (exit 0) but `upload_send_error > 0` in `upload.json.counts`; exit code is 0; `run_dir=` is printed.
+- `partial` is not produced by: `upload_send_error = 0`, zero/null/non-numeric `upload_send_error`, `skipped_parse > 0`, `skipped_validation > 0`, `skipped_prepare > 0`, or missing/invalid `upload.json`.
+- Stage failure takes precedence over `partial`: if any stage exits non-zero, `status` is `failed`, not `partial`.
+- `partial` appends exactly one warning to `pipeline.json.warnings`: `"upload partial success: upload_send_error > 0"`.
+- `partial` does not change process exit behavior; a non-zero partial exit code is not implemented and requires explicit authorization.
 - Upload-stage counts aggregation into `pipeline.json` is non-fatal. If `upload.json` is
   missing, unreadable, invalid JSON, missing the `counts` key, or `counts` is not a JSON
   object: `PipelineStage.counts` for the upload stage remains `null`, exactly one concise
