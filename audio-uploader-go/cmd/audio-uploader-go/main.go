@@ -174,24 +174,67 @@ type Matched struct {
   Data map[string]any `json:"data"`
 }
 
+// Item status values.
+const (
+  statusSent              = "sent"
+  statusPrepared          = "prepared"
+  statusSkippedParse      = "skipped_parse"
+  statusSkippedValidation = "skipped_validation"
+  statusSkippedPrepare    = "skipped_prepare"
+  statusSendError         = "send_error"
+)
+
+// Structured error codes.
+const (
+  errorCodeNone                 = ""
+  errorCodeUnknown              = "unknown"
+  errorCodeJSONRead             = "json_read_error"
+  errorCodeJSONParse            = "json_parse_error"
+  errorCodeLookupNotOK          = "lookup_not_ok"
+  errorCodeDescripRptaEmpty     = "descrip_rpta_empty"
+  errorCodeDescripRptaOTRO      = "descrip_rpta_otro"
+  errorCodeMissingRequiredField = "missing_required_field"
+  errorCodeEmptyOptionalField   = "empty_optional_field"
+  errorCodeFFProbeNotOK         = "ffprobe_not_ok"
+  errorCodeJSONPrepare          = "json_prepare_error"
+  errorCodeSFTPJSON             = "sftp_json_error"
+  errorCodeSFTPWAV              = "sftp_wav_error"
+)
+
+type UploadCounts struct {
+  Total             int `json:"total"`
+  SkippedParse      int `json:"skipped_parse"`
+  SkippedValidation int `json:"skipped_validation"`
+  SkippedPrepare    int `json:"skipped_prepare"`
+  SentOK            int `json:"sent_ok"`
+  SendError         int `json:"send_error"`
+}
+
 type UploadItem struct {
-  RecordID string `json:"record_id"`
-  JsonIn   string `json:"json_in"`
-  JsonOut  string `json:"json_out,omitempty"`
-  WavPath  string `json:"wav_path"`
-  SendOK   bool   `json:"send_ok"`
-  Reason   string `json:"reason,omitempty"`
+  RecordID  string `json:"record_id"`
+  JsonIn    string `json:"json_in"`
+  JsonOut   string `json:"json_out,omitempty"`
+  WavPath   string `json:"wav_path"`
+  SendOK    bool   `json:"send_ok"`
+  Reason    string `json:"reason,omitempty"`
+  Status    string `json:"status"`
+  ErrorCode string `json:"error_code"`
 }
 
 type UploadReport struct {
-  Client   string       `json:"client"`
-  Date     string       `json:"date"`
-  RunID    string       `json:"run_id"`
-  DryRun   bool         `json:"dry_run"`
-  Total    int          `json:"total"`
-  Valid    int          `json:"valid"`
-  Skipped  int          `json:"skipped"`
-  Items    []UploadItem `json:"items"`
+  SchemaVersion int          `json:"schema_version"`
+  Client        string       `json:"client"`
+  Date          string       `json:"date"`
+  RunID         string       `json:"run_id"`
+  DryRun        bool         `json:"dry_run"`
+  StartedAt     string       `json:"started_at"`
+  FinishedAt    string       `json:"finished_at"`
+  DurationMs    int64        `json:"duration_ms"`
+  Total         int          `json:"total"`
+  Valid         int          `json:"valid"`
+  Skipped       int          `json:"skipped"`
+  Counts        UploadCounts `json:"counts"`
+  Items         []UploadItem `json:"items"`
 }
 
 func asInt(v any) int {
@@ -408,6 +451,47 @@ func validateOutgoing(m *Matched, out map[string]any, required []string, optiona
   return true, ""
 }
 
+func reasonToErrorCode(reason string) string {
+  if reason == "" {
+    return errorCodeNone
+  }
+  switch reason {
+  case "lookup_ok=false":
+    return errorCodeLookupNotOK
+  case "descrip_rpta vacío":
+    return errorCodeDescripRptaEmpty
+  case "descrip_rpta=OTRO":
+    return errorCodeDescripRptaOTRO
+  case "ffprobe_ok=false":
+    return errorCodeFFProbeNotOK
+  }
+  if strings.HasPrefix(reason, "read json:") {
+    return errorCodeJSONRead
+  }
+  if strings.HasPrefix(reason, "parse json:") {
+    return errorCodeJSONParse
+  }
+  if strings.HasPrefix(reason, "campo requerido faltante/vacío:") {
+    return errorCodeMissingRequiredField
+  }
+  if strings.HasPrefix(reason, "campo opcional vacío:") {
+    return errorCodeEmptyOptionalField
+  }
+  if strings.HasPrefix(reason, "marshal out:") {
+    return errorCodeJSONPrepare
+  }
+  if strings.HasPrefix(reason, "write prepared:") {
+    return errorCodeJSONPrepare
+  }
+  if strings.HasPrefix(reason, "upload json:") {
+    return errorCodeSFTPJSON
+  }
+  if strings.HasPrefix(reason, "upload wav:") {
+    return errorCodeSFTPWAV
+  }
+  return errorCodeUnknown
+}
+
 func resolveWavFromJson(jsonPath, runDir, fallback string) string {
   b, err := os.ReadFile(jsonPath)
   if err != nil {
@@ -462,8 +546,11 @@ func main() {
   _ = os.MkdirAll(preparedDir, 0o755)
   _ = os.MkdirAll(manifestDir, 0o755)
 
+  startedAt := time.Now()
   report := UploadReport{
+    SchemaVersion: 2,
     Client: a.Client, Date: a.Date, RunID: a.RunID, DryRun: a.DryRun,
+    StartedAt: startedAt.UTC().Format(time.RFC3339),
     Total: len(jps),
     Items: make([]UploadItem, 0, len(jps)),
   }
@@ -505,6 +592,9 @@ func main() {
     b, err := os.ReadFile(jp)
     if err != nil {
       item.Reason = "read json: " + err.Error()
+      item.Status = statusSkippedParse
+      item.ErrorCode = reasonToErrorCode(item.Reason)
+      report.Counts.SkippedParse++
       report.Items = append(report.Items, item)
       report.Skipped++
       continue
@@ -513,6 +603,9 @@ func main() {
     var matched Matched
     if err := json.Unmarshal(b, &matched); err != nil {
       item.Reason = "parse json: " + err.Error()
+      item.Status = statusSkippedParse
+      item.ErrorCode = reasonToErrorCode(item.Reason)
+      report.Counts.SkippedParse++
       report.Items = append(report.Items, item)
       report.Skipped++
       continue
@@ -522,6 +615,9 @@ func main() {
     ok, reason := validateOutgoing(&matched, out, required, optional)
     if !ok {
       item.Reason = reason
+      item.Status = statusSkippedValidation
+      item.ErrorCode = reasonToErrorCode(reason)
+      report.Counts.SkippedValidation++
       report.Items = append(report.Items, item)
       report.Skipped++
       continue
@@ -531,6 +627,9 @@ func main() {
     outBytes, err := json.Marshal(out)
     if err != nil {
       item.Reason = "marshal out: " + err.Error()
+      item.Status = statusSkippedPrepare
+      item.ErrorCode = reasonToErrorCode(item.Reason)
+      report.Counts.SkippedPrepare++
       report.Items = append(report.Items, item)
       report.Skipped++
       continue
@@ -539,6 +638,9 @@ func main() {
     outLocal := filepath.Join(preparedDir, bn)
     if err := os.WriteFile(outLocal, outBytes, 0o644); err != nil {
       item.Reason = "write prepared: " + err.Error()
+      item.Status = statusSkippedPrepare
+      item.ErrorCode = reasonToErrorCode(item.Reason)
+      report.Counts.SkippedPrepare++
       report.Items = append(report.Items, item)
       report.Skipped++
       continue
@@ -546,6 +648,8 @@ func main() {
 
     item.JsonOut = filepath.ToSlash(filepath.Join("prepared", "json", bn))
     item.SendOK = true
+    item.Status = statusPrepared
+    item.ErrorCode = errorCodeNone
     report.Valid++
 
     if !a.DryRun {
@@ -555,25 +659,38 @@ func main() {
       if err := uploadFile(s, outLocal, remoteJsonPath); err != nil {
         item.SendOK = false
         item.Reason = "upload json: " + err.Error()
+        item.Status = statusSendError
+        item.ErrorCode = errorCodeSFTPJSON
         report.Valid-- // revert
         report.Skipped++
+        report.Counts.SendError++
         report.Items = append(report.Items, item)
         continue
       }
       if err := uploadFile(s, wavPath, remoteWavPath); err != nil {
         item.SendOK = false
         item.Reason = "upload wav: " + err.Error()
+        item.Status = statusSendError
+        item.ErrorCode = errorCodeSFTPWAV
         report.Valid--
         report.Skipped++
+        report.Counts.SendError++
         report.Items = append(report.Items, item)
         continue
       }
+      item.Status = statusSent
+      report.Counts.SentOK++
     }
 
     report.Items = append(report.Items, item)
   }
 
   // escribir manifest upload.json
+  finishedAt := time.Now()
+  report.FinishedAt = finishedAt.UTC().Format(time.RFC3339)
+  report.DurationMs = finishedAt.Sub(startedAt).Milliseconds()
+  report.Counts.Total = report.Total
+
   repBytes, _ := json.MarshalIndent(report, "", "  ")
   _ = os.WriteFile(filepath.Join(manifestDir, "upload.json"), repBytes, 0o644)
 
