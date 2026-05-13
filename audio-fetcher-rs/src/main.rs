@@ -55,7 +55,7 @@ fn download_file(client: &Client, url: &str, out_path: &Path, dry_run: bool) -> 
         return Ok(0);
     }
     if let Some(parent) = out_path.parent() { fs::create_dir_all(parent)?; }
-    let mut resp = client.get(url).send().with_context(|| format!("GET {url}"))?;
+    let resp = client.get(url).send().with_context(|| format!("GET {url}"))?;
     resp.error_for_status_ref().with_context(|| format!("status no OK {url}"))?;
     let bytes = resp.bytes().context("leer body")?;
     fs::write(out_path, &bytes)?;

@@ -5,7 +5,7 @@ use audios_common::{
     types::{ConvertManifest, FetchManifest, MatchItem, MatchManifest},
     util,
 };
-use chrono::{NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use clap::Parser;
 use futures_util::TryStreamExt;
 use glob::glob;
@@ -151,7 +151,6 @@ fn load_tail_sql(path: &Path) -> Result<String> {
 
 #[derive(Debug, Deserialize, Clone)]
 struct AgentsFile {
-    pub version: u32,
     pub anexos: HashMap<String, String>,
     pub nombres: HashMap<String, String>,
 }
@@ -166,7 +165,6 @@ fn load_agents(cfg: &ClientConfigFile) -> Result<Option<AgentsFile>> {
 
 #[derive(Debug, Deserialize, Clone)]
 struct RptaOpeCodOutFile {
-    pub version: u32,
     pub default: String,
     pub groups: HashMap<String, Vec<i32>>,
 }
@@ -353,7 +351,7 @@ async fn main() -> Result<()> {
         let parsed = util::detect_tipo_and_parse(&filename);
         let (tipo, record_id, dt, id_raw, telefono, cid, anexo, parse_ok) = match parsed {
             Ok((tipo, record_id, dt, id_ag, tel, cid, anexo)) => (tipo, record_id, dt, id_ag, tel, cid, anexo, true),
-            Err(_) => (1u8, util::record_id_from_filename(&filename), NaiveDateTime::from_timestamp_opt(0, 0).unwrap(), 0, "0".into(), None, None, false),
+            Err(_) => (1u8, util::record_id_from_filename(&filename), DateTime::<Utc>::from_timestamp(0, 0).map(|dt| dt.naive_utc()).unwrap_or_default(), 0, "0".into(), None, None, false),
         };
 
         // resolver id_agente por anexo si aplica
