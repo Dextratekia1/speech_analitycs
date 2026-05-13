@@ -239,6 +239,29 @@ Config: `/shared/config/clients/{client}.yml`
 - `partial` is controlled solely by `upload_send_error > 0` in `upload.json.counts`.
   Fetch, convert, and match counts do not trigger `partial`.
 
+### Pipeline-runner stderr capture invariants
+
+- `PipelineStage.stderr_tail` is a field in `pipeline.json`; `schema_version` remains `1` — incrementing requires explicit authorization.
+- `stderr_tail` is `null` for:
+  - pending stages (before the stage runs)
+  - skipped stages (stage did not execute due to a prior stage failure)
+  - successful stages (exit code 0), even if stderr was non-empty
+  - failed stages with empty stderr
+- `stderr_tail` may be non-null only when the stage exits non-zero **and** captured stderr is non-empty.
+- `stderr_tail` is bounded to the last `2048` bytes of stderr output. The limit is fixed and
+  non-configurable unless a future phase explicitly changes it.
+- `stdout` remains inherited and is not captured into `pipeline.json`.
+- Captured stderr is mirrored back to the parent process's stderr after the stage exits;
+  this mirror is not real-time — it occurs after the subprocess completes.
+- `stderr_tail` capture does not affect:
+  - stage exit code semantics
+  - `PipelineReport.status`
+  - `partial` detection (controlled solely by `upload_send_error > 0`)
+  - counts aggregation
+  - `run_dir=` printing behavior
+- `stderr_tail` must not be used to intentionally store or print secrets or PII. Stderr text
+  may contain operational error context; the 2048-byte bound keeps the field concise.
+
 ---
 
 ## Forbidden commands (always)

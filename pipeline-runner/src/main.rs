@@ -4,8 +4,9 @@ use chrono::Utc;
 use clap::Parser;
 use serde::Serialize;
 use serde_json::Value;
+use std::io::Write;
 use std::time::Instant;
-use std::{fs, path::{Path, PathBuf}, process::Command};
+use std::{fs, path::{Path, PathBuf}, process::{Command, Stdio}};
 
 // Pipeline-level status values.
 const PIPELINE_STATUS_OK: &str = "ok";
@@ -17,6 +18,8 @@ const STAGE_STATUS_PENDING: &str = "pending";
 const STAGE_STATUS_OK: &str = "ok";
 const STAGE_STATUS_FAILED: &str = "failed";
 const STAGE_STATUS_SKIPPED: &str = "skipped";
+
+const STDERR_TAIL_LIMIT: usize = 2048;
 
 #[derive(Serialize)]
 struct PipelineStage {
@@ -109,31 +112,73 @@ fn make_skipped_stage(name: &str, command: &str, manifest_path: &str) -> Pipelin
     }
 }
 
-// Runs cmd and populates stage timing/status. Returns true on success.
+// Returns a bounded UTF-8 tail of stderr bytes, or None if empty.
+// Advances past UTF-8 continuation bytes at the trim point to avoid
+// splitting a multi-byte sequence. Always returns valid UTF-8.
+fn extract_stderr_tail(stderr: &[u8]) -> Option<String> {
+    if stderr.is_empty() {
+        return None;
+    }
+    let start = if stderr.len() <= STDERR_TAIL_LIMIT {
+        0
+    } else {
+        let raw = stderr.len() - STDERR_TAIL_LIMIT;
+        // Skip continuation bytes (0x80..=0xBF) at the cut point.
+        let mut pos = raw;
+        while pos < stderr.len() && (stderr[pos] & 0xC0) == 0x80 {
+            pos += 1;
+        }
+        pos
+    };
+    let tail = &stderr[start..];
+    if tail.is_empty() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(tail).into_owned())
+}
+
+// Runs cmd, capturing stderr while leaving stdout inherited.
+// Populates stage timing, status, error, and stderr_tail.
+// Returns true on success (exit code 0), false otherwise.
 fn run_stage(mut cmd: Command, stage: &mut PipelineStage) -> bool {
+    cmd.stderr(Stdio::piped());
     stage.started_at = Some(Utc::now().to_rfc3339());
     let t0 = Instant::now();
-    match cmd.status() {
+    let child = match cmd.spawn() {
         Err(e) => {
             stage.finished_at = Some(Utc::now().to_rfc3339());
             stage.duration_ms = Some(t0.elapsed().as_millis() as i64);
             stage.status = STAGE_STATUS_FAILED.to_string();
             stage.error = Some(format!("spawn {}: {e}", stage.command));
-            false
+            return false;
         }
-        Ok(status) => {
+        Ok(c) => c,
+    };
+    let output = match child.wait_with_output() {
+        Err(e) => {
             stage.finished_at = Some(Utc::now().to_rfc3339());
             stage.duration_ms = Some(t0.elapsed().as_millis() as i64);
-            stage.exit_code = status.code();
-            if status.success() {
-                stage.status = STAGE_STATUS_OK.to_string();
-                true
-            } else {
-                stage.status = STAGE_STATUS_FAILED.to_string();
-                stage.error = Some(format!("{} exited: {status}", stage.command));
-                false
-            }
+            stage.status = STAGE_STATUS_FAILED.to_string();
+            stage.error = Some(format!("wait {}: {e}", stage.command));
+            return false;
         }
+        Ok(o) => o,
+    };
+    stage.finished_at = Some(Utc::now().to_rfc3339());
+    stage.duration_ms = Some(t0.elapsed().as_millis() as i64);
+    stage.exit_code = output.status.code();
+    if output.status.success() {
+        stage.status = STAGE_STATUS_OK.to_string();
+        true
+    } else {
+        stage.status = STAGE_STATUS_FAILED.to_string();
+        stage.error = Some(format!("{} exited: {}", stage.command, output.status));
+        // Mirror captured stderr to parent stderr so operator logs remain useful.
+        if !output.stderr.is_empty() {
+            let _ = std::io::stderr().write_all(&output.stderr);
+        }
+        stage.stderr_tail = extract_stderr_tail(&output.stderr);
+        false
     }
 }
 
@@ -760,15 +805,17 @@ mod tests {
         }
     }
 
-    // Guards that counts and stderr_tail serialize as JSON null in the Phase 2H-B shape.
+    // Guards that a pending stage serializes counts and stderr_tail as JSON null.
+    // counts becomes non-null only after the stage runs and aggregation populates it.
+    // stderr_tail becomes non-null only when a stage fails with non-empty stderr.
     #[test]
-    fn test_counts_and_stderr_tail_are_null_in_phase_2h_b_shape() {
+    fn test_pending_stage_stderr_tail_starts_null() {
         let stage = make_pending_stage("fetch", "audio-fetcher-rs", "manifests/fetch.json");
         let v: Value = serde_json::to_value(&stage).unwrap();
         assert_eq!(v.get("counts").unwrap(), &json!(null),
-            "counts must be null in Phase 2H-B (aggregation not yet implemented)");
+            "pending stage counts must serialize as null before aggregation runs");
         assert_eq!(v.get("stderr_tail").unwrap(), &json!(null),
-            "stderr_tail must be null in Phase 2H-B (stderr capture not yet implemented)");
+            "pending stage stderr_tail must serialize as null before the stage runs");
     }
 
     // Guards against PII field names being added to PipelineReport or PipelineStage JSON.
@@ -1608,5 +1655,107 @@ mod tests {
         // fetch_total must still be intact.
         assert_eq!(summary["fetch_total"].as_u64().unwrap(), 7,
             "fetch_total must not be disturbed by upload re-merge");
+    }
+
+    // --- extract_stderr_tail helper tests ---
+
+    #[test]
+    fn test_extract_stderr_tail_empty_returns_none() {
+        assert!(extract_stderr_tail(b"").is_none(), "empty bytes must return None");
+    }
+
+    #[test]
+    fn test_extract_stderr_tail_short_value_is_preserved() {
+        let msg = b"error: connection refused\n";
+        let result = extract_stderr_tail(msg).expect("non-empty stderr must return Some");
+        assert_eq!(result, "error: connection refused\n");
+    }
+
+    #[test]
+    fn test_extract_stderr_tail_long_value_is_truncated_to_tail() {
+        let prefix = "X".repeat(STDERR_TAIL_LIMIT + 100);
+        let suffix = "TAIL_MARKER_12345";
+        let full = format!("{prefix}{suffix}");
+        assert!(full.len() > STDERR_TAIL_LIMIT, "precondition: input longer than limit");
+        let result = extract_stderr_tail(full.as_bytes())
+            .expect("non-empty long stderr must return Some");
+        // Truncation: result must be strictly shorter than the full input.
+        assert!(
+            result.len() < full.len(),
+            "truncation must occur: result len {} must be less than full len {}",
+            result.len(), full.len()
+        );
+        assert!(
+            result.ends_with(suffix),
+            "tail must preserve the end of input: got {result:?}"
+        );
+        assert!(
+            result.len() <= STDERR_TAIL_LIMIT,
+            "tail length {} must not exceed limit {}",
+            result.len(), STDERR_TAIL_LIMIT
+        );
+    }
+
+    #[test]
+    fn test_extract_stderr_tail_exactly_at_limit_is_preserved() {
+        let msg = "A".repeat(STDERR_TAIL_LIMIT);
+        let result = extract_stderr_tail(msg.as_bytes()).expect("expected Some at exact limit");
+        assert_eq!(result.len(), STDERR_TAIL_LIMIT);
+    }
+
+    // --- skipped stage stderr_tail invariant ---
+
+    #[test]
+    fn test_skipped_stage_stderr_tail_is_null() {
+        let s = make_skipped_stage("convert", "audio-converter-rs", "manifests/convert.json");
+        assert!(s.stderr_tail.is_none(), "skipped stage must have null stderr_tail");
+    }
+
+    // --- run_stage subprocess tests ---
+    // Uses /bin/sh (available in the Rust test container on bookworm) with synthetic
+    // commands only. No project pipeline stages, no external services, no PII.
+
+    #[test]
+    fn test_run_stage_failed_command_captures_stderr() {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "echo 'stage error message' >&2; exit 1"]);
+        let mut stage = make_pending_stage("test-fetch", "test-cmd", "manifests/test.json");
+        let ok = run_stage(cmd, &mut stage);
+        assert!(!ok, "run_stage must return false for non-zero exit");
+        assert_eq!(stage.status, STAGE_STATUS_FAILED);
+        let tail = stage.stderr_tail
+            .expect("stderr_tail must be Some when stage fails with stderr output");
+        assert!(
+            tail.contains("stage error message"),
+            "stderr_tail must contain the error text: got {tail:?}"
+        );
+    }
+
+    #[test]
+    fn test_run_stage_success_leaves_stderr_tail_null() {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "echo 'stderr on success' >&2; exit 0"]);
+        let mut stage = make_pending_stage("test-fetch", "test-cmd", "manifests/test.json");
+        let ok = run_stage(cmd, &mut stage);
+        assert!(ok, "run_stage must return true for zero exit");
+        assert_eq!(stage.status, STAGE_STATUS_OK);
+        assert!(
+            stage.stderr_tail.is_none(),
+            "stderr_tail must remain None when stage succeeds"
+        );
+    }
+
+    #[test]
+    fn test_run_stage_failed_no_stderr_leaves_tail_null() {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "exit 1"]);
+        let mut stage = make_pending_stage("test-fetch", "test-cmd", "manifests/test.json");
+        let ok = run_stage(cmd, &mut stage);
+        assert!(!ok, "run_stage must return false for non-zero exit");
+        assert_eq!(stage.status, STAGE_STATUS_FAILED);
+        assert!(
+            stage.stderr_tail.is_none(),
+            "stderr_tail must remain None when no stderr output"
+        );
     }
 }
