@@ -21,6 +21,9 @@ struct Args {
 
     #[arg(long, default_value_t = false)]
     dry_run: bool,
+
+    #[arg(long, default_value = "config/clients")]
+    clients_dir: String,
 }
 
 fn run_cmd(mut cmd: Command, label: &str) -> Result<()> {
@@ -63,6 +66,8 @@ fn main() -> Result<()> {
         &args.shared_root,
         "--run-id",
         &run_id,
+        "--clients-dir",
+        &args.clients_dir,
     ]);
     if args.dry_run {
         c.arg("--dry-run");
@@ -97,6 +102,8 @@ fn main() -> Result<()> {
         &args.shared_root,
         "--run-id",
         &run_id,
+        "--clients-dir",
+        &args.clients_dir,
     ]);
     if args.dry_run {
         c.arg("--dry-run");
