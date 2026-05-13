@@ -145,6 +145,26 @@ Config: `/shared/config/clients/{client}.yml`
   real MSSQL, SFTP, or HTTP audio servers.
 - Do not create commits or push unless explicitly authorized.
 
+### Operational network namespace invariants
+
+- Real pipeline runs requiring VPN access (MSSQL, HTTP audio source, SFTP destination)
+  must use direct `podman run --network container:work-netns`; bare `podman-compose run`
+  is not sufficient for real runs.
+- `work-netns` must already be running before any non-dry-run pipeline execution.
+- `work-netns` is external operational infrastructure; this repository does not manage
+  its lifecycle or the VPN.
+- `scripts/run_range.sh` is the authoritative operational script for real runs; it passes
+  `--network container:work-netns` and hard-fails if `work-netns` is not running.
+- `scripts/run_rangev2.sh` is deprecated and must not be used for operational runs.
+- `podman-compose.override.yml` must reference `container:work-netns` for all services.
+- `container:container-vpn` is a stale name; it must not appear in active configurations.
+- In this environment, podman-compose 1.5.0 does not auto-merge the override file.
+  Compose-based commands must always pass:
+  `-f podman-compose.yml -f podman-compose.override.yml`
+- Before using compose for any real run, verify effective network config with:
+  `podman-compose -f podman-compose.yml -f podman-compose.override.yml config`
+  — the output must show `network_mode: container:work-netns` for all pipeline services.
+
 ### MSSQL TLS
 - `MSSQL_TRUST_CERT` defaults to `false`; unrecognized values also resolve to `false`.
 - Do not change `MSSQL_ENCRYPT` behavior without explicit authorization.
