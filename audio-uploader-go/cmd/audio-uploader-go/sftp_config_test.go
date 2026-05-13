@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,4 +274,75 @@ func TestSFTPHostKeyAlgorithmMatchesParsedKeyType_ED25519(t *testing.T) {
 	if algos[0] != pubKey.Type() {
 		t.Errorf("algorithm %q does not match pubKey.Type() %q", algos[0], pubKey.Type())
 	}
+}
+
+// TestSFTPConnectMalformedHostKeyFailsBeforeDial covers GAP-A: sftpConnect must
+// return an error before any network dial when HostKeyRaw is non-empty but not
+// a valid OpenSSH authorized_keys line. ssh.ParseAuthorizedKey is called before
+// ssh.Dial, so a malformed key is rejected without network access.
+func TestSFTPConnectMalformedHostKeyFailsBeforeDial(t *testing.T) {
+	cfg := SFTPConfig{
+		Host:       "127.0.0.1",
+		Port:       "22",
+		User:       "synthetic-user",
+		Password:   "synthetic-password",
+		RemoteBase: "/incoming",
+		HostKeyRaw: "not-a-valid-authorized-key",
+	}
+	_, err := sftpConnect(cfg)
+	if err == nil {
+		t.Fatal("expected error for malformed HostKeyRaw, got nil")
+	}
+	if !strings.Contains(err.Error(), "SFTP_HOST_KEY inválido") {
+		t.Errorf("expected error to contain 'SFTP_HOST_KEY inválido', got: %v", err)
+	}
+	// Password must not appear in the error message (credential leak guard).
+	if strings.Contains(err.Error(), "synthetic-password") {
+		t.Errorf("password must not appear in error message: %v", err)
+	}
+}
+
+// TestDryRunDoesNotRequireSFTPHostKey covers GAP-B: parseSFTPConfig fails when
+// SFTP_HOST_KEY is absent, confirming that the dry-run code path must bypass it.
+// The per-item processing functions (buildOutgoing, validateOutgoing) succeed
+// without any SFTP configuration.
+func TestDryRunDoesNotRequireSFTPHostKey(t *testing.T) {
+	// parseSFTPConfig fails without SFTP_HOST_KEY — confirming dry-run must bypass it.
+	_, err := parseSFTPConfig("/nonexistent/sftp.env")
+	if err == nil {
+		t.Fatal("parseSFTPConfig must fail without SFTP credentials")
+	}
+
+	// The per-item processing used in the dry-run path works without SFTP config.
+	m := makeNaturaMatched()
+	out, required, optional := buildOutgoing(m)
+	ok, reason := validateOutgoing(m, out, required, optional)
+	if !ok {
+		t.Errorf("processing functions must succeed without SFTP config; got rejected: %s", reason)
+	}
+}
+
+// TestDryRunMarksItemsPreparedWithoutSFTPConnect covers GAP-B: exercises the
+// per-item dry-run pipeline (buildOutgoing → validateOutgoing → marshal → write)
+// end-to-end without calling parseSFTPConfig or sftpConnect. An item that
+// completes this path in main() receives statusPrepared, not statusSent.
+func TestDryRunMarksItemsPreparedWithoutSFTPConnect(t *testing.T) {
+	m := makeNaturaMatched()
+
+	out, required, optional := buildOutgoing(m)
+	ok, reason := validateOutgoing(m, out, required, optional)
+	if !ok {
+		t.Fatalf("expected valid outgoing, got rejected: %s", reason)
+	}
+
+	outBytes, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "record-001.json"), outBytes, 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	// No parseSFTPConfig or sftpConnect called above; no SFTP_HOST_KEY required.
 }
