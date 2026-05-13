@@ -154,6 +154,18 @@ Config: `/shared/config/clients/{client}.yml`
 - For MAF, `placa` null/missing/empty must not block upload; it is emitted as `""`.
 - All other MAF required fields remain required unless a future phase explicitly changes them.
 
+### Upload report invariants
+- `upload.json` `schema_version` is `2`; incrementing requires explicit authorization.
+- `UploadItem.status` must use only the defined constants: `sent`, `prepared`,
+  `skipped_parse`, `skipped_validation`, `skipped_prepare`, `send_error`.
+- `UploadItem.error_code` must use only the constants defined in `main.go`
+  (empty string `""` represents success/no error).
+- `reasonToErrorCode` is the single translation point from reason strings to
+  `error_code`; do not inline reason→error_code mappings at call sites.
+- `upload.json` must not add PII fields beyond the filename/path-derived fields
+  already present: `record_id`, `json_in`, `json_out`, `wav_path`.
+- `UploadCounts` JSON field names must remain snake_case.
+
 ### Pipeline-runner forwarding
 - `--clients-dir` is accepted by `pipeline-runner` and forwarded only to
   `audio-fetcher-rs` and `metadata-matcher-rs`.
