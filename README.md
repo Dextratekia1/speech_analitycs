@@ -14,10 +14,12 @@ Se monta `./shared` como `/shared` dentro de contenedores.
 
 Ejecución:
 `/shared/runs/{client}/{date}/{run_id}/`
-- `raw/` descargas
-- `wav/` conversiones
-- `matched/` json
-- `manifests/` manifests
+- `raw/` — archivos GSM descargados
+- `wav/` — archivos WAV convertidos
+- `matched/` — JSON enriquecido por registro (contiene PII)
+- `prepared/json/` — JSON recortado preparado para subida por SFTP
+- `manifests/` — manifests de etapa: fetch.json, convert.json, match.json, upload.json
+- `pipeline.json` — reporte de ejecución escrito por pipeline-runner
 
 ## Config por cliente
 - `/shared/config/clients/natura.yml`
@@ -25,6 +27,34 @@ Ejecución:
 - Tail SQL:
   - `/shared/config/natura/batch_lookup.yml`
   - `/shared/config/maf/batch_lookup.yml`
+
+## Reporte de ejecución: pipeline.json
+
+`pipeline-runner` escribe `pipeline.json` en el directorio del run al finalizar, tanto en
+caso de éxito como de fallo. Contiene:
+
+- `schema_version: 1`
+- Estado global del pipeline: `ok`, `failed`, o `partial`.
+- Estado por etapa: `ok`, `failed`, `skipped`.
+- Resumen de conteos: `fetch_total`, `convert_total`, `match_total`, `upload_sent_ok`,
+  `upload_send_error`, etc.
+- `stderr_tail`: fragmento final del stderr capturado para etapas que fallan con stderr
+  no vacío (limitado a 2048 bytes). Nulo para etapas exitosas o sin stderr.
+
+`pipeline.json` no contiene PII de registros individuales. Los valores del resumen son
+conteos numéricos.
+
+### Estado del pipeline
+
+| Status | Significado |
+|---|---|
+| `ok` | Todas las etapas completaron exitosamente. |
+| `failed` | Al menos una etapa salió con error (exit code ≠ 0). |
+| `partial` | Todas las etapas salieron con exit 0, pero `upload_send_error > 0`. |
+
+- `partial` imprime `run_dir=` y retorna exit 0.
+- `partial` es controlado únicamente por `upload_send_error > 0` en el reporte de upload.
+- Una falla de etapa (exit code ≠ 0) toma precedencia sobre `partial`.
 
 ## Red VPN — prerequisito para ejecuciones reales
 
@@ -63,6 +93,33 @@ START=2026-05-13 END=2026-05-13 MODE=full scripts/run_range.sh
 - `MODE=match` — ejecuta solo fetcher + converter + matcher (sin SFTP).
 - `BUILD=1` — reconstruye imágenes antes de ejecutar.
 - `NET_MODE` — sobreescribe el namespace de red (default: `container:work-netns`).
+
+`scripts/run_rangev2.sh` está obsoleto (deprecated) y no debe usarse para ejecuciones
+operativas. Usar únicamente `scripts/run_range.sh`.
+
+## Comportamiento de skip y recuperación de runs fallidos
+
+`scripts/run_range.sh` salta un client/fecha automáticamente si el directorio del run ya
+existe en `shared/runs/{client}/{date}/{run_id}/`. El script imprime
+`SKIP {client} {date} (exists: {run_dir})` y continúa al siguiente. Esto evita
+sobreescribir artefactos de un run previo.
+
+Si un run anterior falló después de crear el directorio, el reintento para el mismo
+client/fecha quedará saltado hasta que el operador intervenga.
+
+**Para reintentar un run fallido o incompleto:**
+
+1. Revisar `pipeline.json` en el directorio del run para identificar la etapa fallida
+   y el motivo.
+2. Confirmar que el directorio corresponde únicamente al run fallido o incompleto que
+   debe descartarse.
+3. Mover o eliminar el directorio según las reglas de retención y manejo de datos del
+   responsable. `shared/runs/` puede contener PII (nombres, teléfonos, datos de deuda)
+   y grabaciones de audio.
+4. Volver a ejecutar `scripts/run_range.sh` con el rango de fechas correspondiente.
+
+No leer archivos individuales de `matched/` ni grabaciones de audio como paso de
+diagnóstico estándar.
 
 ## Dev / dry-run con podman-compose
 
