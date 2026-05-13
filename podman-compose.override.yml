@@ -2,23 +2,23 @@ version: "3.8"
 
 services:
   audio-fetcher-rs:
-    network_mode: "container:container-vpn"
+    network_mode: "container:work-netns"
 
   audio-converter-rs:
-    network_mode: "container:container-vpn"
+    network_mode: "container:work-netns"
 
   metadata-matcher-rs:
-    network_mode: "container:container-vpn"
+    network_mode: "container:work-netns"
     secrets:
       - mssql-env-v2
 
   audio-uploader-go:
-    network_mode: "container:container-vpn"
+    network_mode: "container:work-netns"
     secrets:
       - sftp-env
 
   pipeline-runner:
-    network_mode: "container:container-vpn"
+    network_mode: "container:work-netns"
     secrets:
       - mssql-env-v2
       - sftp-env

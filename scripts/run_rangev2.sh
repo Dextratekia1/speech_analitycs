@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# DEPRECATED: usar scripts/run_range.sh para ejecuciones operativas.
+# run_range.sh usa container:work-netns e incluye los preflight checks necesarios.
+# Este script se conserva solo como referencia histórica.
 set -euo pipefail
 
 START="2026-02-09"
@@ -25,24 +28,24 @@ for client in "${CLIENTS[@]}"; do
     echo "RUN  $client $d  run_id=$run_id" | tee -a "$log"
     
     if [[ "$MODE" == "match" ]]; then
-      podman run --rm --pull=never --network=container:container-vpn \
+      podman run --rm --pull=never --network=container:work-netns \
         -v ./shared:/shared:Z -e RUST_LOG=info \
         localhost/audios-natura/audio-fetcher-rs:dev \
         --client "$client" --date "$d" --run-id "$run_id" |& tee -a "$log"
       
-      podman run --rm --pull=never --network=container:container-vpn \
+      podman run --rm --pull=never --network=container:work-netns \
         -v ./shared:/shared:Z -e RUST_LOG=info \
         localhost/audios-natura/audio-converter-rs:dev \
         --client "$client" --date "$d" --run-id "$run_id" |& tee -a "$log"
       
-      podman run --rm --pull=never --network=container:container-vpn \
+      podman run --rm --pull=never --network=container:work-netns \
         -v ./shared:/shared:Z -e RUST_LOG=info \
         --secret mssql-env-v2 \
         localhost/audios-natura/metadata-matcher-rs:dev \
         --client "$client" --date "$d" --run-id "$run_id" \
         --mssql-env-file "$MSSQL_ENV_FILE" |& tee -a "$log"
     else
-      podman run --rm --pull=never --network=container:container-vpn \
+      podman run --rm --pull=never --network=container:work-netns \
         -v ./shared:/shared:Z -e RUST_LOG=info \
         --secret mssql-env-v2 --secret sftp-env \
         localhost/audios-natura/pipeline-runner:dev \
