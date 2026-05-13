@@ -5,7 +5,7 @@ use clap::Parser;
 use serde::Serialize;
 use serde_json::Value;
 use std::time::Instant;
-use std::{fs, path::PathBuf, process::Command};
+use std::{fs, path::{Path, PathBuf}, process::Command};
 
 // Pipeline-level status values.
 const PIPELINE_STATUS_OK: &str = "ok";
@@ -145,6 +145,48 @@ fn write_pipeline_json(report: &PipelineReport, manifest_dir: &PathBuf) -> Resul
     Ok(())
 }
 
+// Reads upload.json and extracts the top-level "counts" object.
+// Returns (Some(counts_value), None) on success.
+// Returns (None, Some(warning)) on any failure; never panics and never fails the pipeline.
+fn read_upload_counts(path: &Path) -> (Option<Value>, Option<String>) {
+    let bytes = match fs::read(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return (None, Some("upload manifest missing".to_string()));
+        }
+        Err(e) => {
+            return (None, Some(format!("upload manifest read failed: {e}")));
+        }
+        Ok(b) => b,
+    };
+    let doc: Value = match serde_json::from_slice(&bytes) {
+        Err(_) => return (None, Some("upload manifest parse failed".to_string())),
+        Ok(v) => v,
+    };
+    match doc.get("counts") {
+        None => (None, Some("upload manifest counts missing".to_string())),
+        Some(c) if c.is_object() => (Some(c.clone()), None),
+        Some(_) => (None, Some("upload manifest counts not object".to_string())),
+    }
+}
+
+// Builds the pipeline-level summary object from upload counts.
+// Maps upload.json counts fields to upload_* summary keys.
+// Missing or non-numeric fields default to 0 without error.
+fn summarize_upload_counts(counts: Option<&Value>) -> Value {
+    let Some(c) = counts else {
+        return Value::Object(serde_json::Map::new());
+    };
+    let n = |key: &str| -> u64 { c.get(key).and_then(|v| v.as_u64()).unwrap_or(0) };
+    serde_json::json!({
+        "upload_total":              n("total"),
+        "upload_sent_ok":            n("sent_ok"),
+        "upload_skipped_parse":      n("skipped_parse"),
+        "upload_skipped_validation": n("skipped_validation"),
+        "upload_skipped_prepare":    n("skipped_prepare"),
+        "upload_send_error":         n("send_error"),
+    })
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -176,6 +218,8 @@ fn main() -> Result<()> {
     let mut report_status = PIPELINE_STATUS_OK.to_string();
     let mut report_exit_code: i32 = 0;
     let mut report_error: Option<String> = None;
+    let mut report_summary: Value = Value::Object(serde_json::Map::new());
+    let mut report_warnings: Vec<String> = Vec::new();
 
     // 1) fetch
     {
@@ -270,6 +314,7 @@ fn main() -> Result<()> {
     stages.push(stage_match);
 
     // 4) upload
+    let upload_was_skipped = failed;
     let stage_upload = if failed {
         make_skipped_stage("upload", "audio-uploader-go", "manifests/upload.json")
     } else {
@@ -299,6 +344,19 @@ fn main() -> Result<()> {
     };
     stages.push(stage_upload);
 
+    if !upload_was_skipped {
+        let upload_manifest = manifest_dir.join("upload.json");
+        let (counts, warn) = read_upload_counts(&upload_manifest);
+        if let Some(ref c) = counts {
+            if let Some(st) = stages.last_mut() {
+                st.counts = Some(c.clone());
+            }
+            report_summary = summarize_upload_counts(Some(c));
+        } else if let Some(w) = warn {
+            report_warnings.push(w);
+        }
+    }
+
     let pipeline_finished_at = Utc::now().to_rfc3339();
     let pipeline_duration_ms = pipeline_t0.elapsed().as_millis() as i64;
 
@@ -318,8 +376,8 @@ fn main() -> Result<()> {
         failed_stage: report_failed_stage,
         exit_code: report_exit_code,
         stages,
-        summary: Value::Object(serde_json::Map::new()),
-        warnings: Vec::new(),
+        summary: report_summary,
+        warnings: report_warnings,
         error: report_error,
     };
 
@@ -525,5 +583,144 @@ mod tests {
                     "PipelineStage has forbidden PII field: {k}");
             }
         }
+    }
+
+    // --- Helpers for read_upload_counts / summarize_upload_counts tests ---
+
+    // Writes synthetic JSON content to a unique temp file and returns the path.
+    fn write_temp_json(name: &str, content: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir()
+            .join(format!("pipetest_{}_{}.json", name, std::process::id()));
+        std::fs::write(&path, content).expect("write_temp_json failed");
+        path
+    }
+
+    // --- read_upload_counts tests ---
+
+    // Verifies that a well-formed upload.json with a counts object returns Some(counts) and no warning.
+    #[test]
+    fn test_read_upload_counts_valid_counts_object() {
+        let content = r#"{"schema_version":2,"counts":{"total":5,"sent_ok":3,"skipped_parse":0,"skipped_validation":1,"skipped_prepare":0,"send_error":1}}"#;
+        let path = write_temp_json("valid_counts", content);
+        let (counts, warn) = read_upload_counts(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(counts.is_some(), "expected Some(counts), got None");
+        assert!(warn.is_none(), "expected no warning, got: {warn:?}");
+        let c = counts.unwrap();
+        assert_eq!(c["total"].as_u64().unwrap(), 5);
+        assert_eq!(c["sent_ok"].as_u64().unwrap(), 3);
+        assert_eq!(c["send_error"].as_u64().unwrap(), 1);
+    }
+
+    // Verifies that a nonexistent path returns None and a warning containing "missing".
+    #[test]
+    fn test_read_upload_counts_missing_file_warns() {
+        let path = std::env::temp_dir()
+            .join(format!("pipetest_missing_{}_nonexistent.json", std::process::id()));
+        let (counts, warn) = read_upload_counts(&path);
+        assert!(counts.is_none(), "expected None counts for missing file");
+        assert!(warn.is_some(), "expected a warning for missing file");
+        assert!(
+            warn.unwrap().contains("missing"),
+            "warning must contain 'missing'"
+        );
+    }
+
+    // Verifies that invalid JSON content returns None and a warning containing "parse failed".
+    #[test]
+    fn test_read_upload_counts_invalid_json_warns() {
+        let path = write_temp_json("invalid_json", "not valid json {{{");
+        let (counts, warn) = read_upload_counts(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(counts.is_none(), "expected None counts for invalid JSON");
+        assert!(warn.is_some(), "expected a warning for invalid JSON");
+        assert!(
+            warn.unwrap().contains("parse failed"),
+            "warning must contain 'parse failed'"
+        );
+    }
+
+    // Verifies that valid JSON with no counts field returns None and a warning containing "counts missing".
+    #[test]
+    fn test_read_upload_counts_missing_counts_warns() {
+        let path = write_temp_json("missing_counts", r#"{"schema_version":2}"#);
+        let (counts, warn) = read_upload_counts(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(counts.is_none(), "expected None counts when counts field absent");
+        assert!(warn.is_some(), "expected a warning when counts field absent");
+        assert!(
+            warn.unwrap().contains("counts missing"),
+            "warning must contain 'counts missing'"
+        );
+    }
+
+    // Verifies that a counts field that is not an object (null) returns None and a warning containing "counts not object".
+    #[test]
+    fn test_read_upload_counts_counts_not_object_warns() {
+        let path = write_temp_json("counts_null", r#"{"schema_version":2,"counts":null}"#);
+        let (counts, warn) = read_upload_counts(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(counts.is_none(), "expected None counts when counts is not an object");
+        assert!(warn.is_some(), "expected a warning when counts is not an object");
+        assert!(
+            warn.unwrap().contains("counts not object"),
+            "warning must contain 'counts not object'"
+        );
+    }
+
+    // --- summarize_upload_counts tests ---
+
+    // Verifies that a full counts object produces the correct upload_* summary fields.
+    #[test]
+    fn test_summarize_upload_counts_valid_counts() {
+        let counts = json!({
+            "total": 5, "sent_ok": 3, "skipped_parse": 0,
+            "skipped_validation": 1, "skipped_prepare": 0, "send_error": 1
+        });
+        let summary = summarize_upload_counts(Some(&counts));
+        assert_eq!(summary["upload_total"].as_u64().unwrap(), 5);
+        assert_eq!(summary["upload_sent_ok"].as_u64().unwrap(), 3);
+        assert_eq!(summary["upload_skipped_parse"].as_u64().unwrap(), 0);
+        assert_eq!(summary["upload_skipped_validation"].as_u64().unwrap(), 1);
+        assert_eq!(summary["upload_skipped_prepare"].as_u64().unwrap(), 0);
+        assert_eq!(summary["upload_send_error"].as_u64().unwrap(), 1);
+    }
+
+    // Verifies that None input returns an empty JSON object.
+    #[test]
+    fn test_summarize_upload_counts_none_returns_empty_object() {
+        let summary = summarize_upload_counts(None);
+        assert!(summary.is_object(), "result must be a JSON object");
+        assert_eq!(
+            summary.as_object().unwrap().len(),
+            0,
+            "object must be empty when counts is None"
+        );
+    }
+
+    // Verifies that missing numeric fields in a partial counts object default to 0.
+    #[test]
+    fn test_summarize_upload_counts_missing_fields_default_to_zero() {
+        let counts = json!({"total": 7, "sent_ok": 6});
+        let summary = summarize_upload_counts(Some(&counts));
+        assert_eq!(summary["upload_total"].as_u64().unwrap(), 7);
+        assert_eq!(summary["upload_sent_ok"].as_u64().unwrap(), 6);
+        assert_eq!(summary["upload_skipped_parse"].as_u64().unwrap(), 0);
+        assert_eq!(summary["upload_skipped_validation"].as_u64().unwrap(), 0);
+        assert_eq!(summary["upload_skipped_prepare"].as_u64().unwrap(), 0);
+        assert_eq!(summary["upload_send_error"].as_u64().unwrap(), 0);
+    }
+
+    // Verifies that non-numeric values for counts fields are treated as 0.
+    #[test]
+    fn test_summarize_upload_counts_non_numeric_fields_default_to_zero() {
+        let counts = json!({"total": "not-a-number", "sent_ok": 4, "send_error": "bad"});
+        let summary = summarize_upload_counts(Some(&counts));
+        assert_eq!(summary["upload_total"].as_u64().unwrap(), 0);
+        assert_eq!(summary["upload_sent_ok"].as_u64().unwrap(), 4);
+        assert_eq!(summary["upload_send_error"].as_u64().unwrap(), 0);
+        assert_eq!(summary["upload_skipped_parse"].as_u64().unwrap(), 0);
+        assert_eq!(summary["upload_skipped_validation"].as_u64().unwrap(), 0);
+        assert_eq!(summary["upload_skipped_prepare"].as_u64().unwrap(), 0);
     }
 }
