@@ -213,23 +213,31 @@ Config: `/shared/config/clients/{client}.yml`
 - Stage failure takes precedence over `partial`: if any stage exits non-zero, `status` is `failed`, not `partial`.
 - `partial` appends exactly one warning to `pipeline.json.warnings`: `"upload partial success: upload_send_error > 0"`.
 - `partial` does not change process exit behavior; a non-zero partial exit code is not implemented and requires explicit authorization.
-- Upload-stage counts aggregation into `pipeline.json` is non-fatal. If `upload.json` is
-  missing, unreadable, invalid JSON, missing the `counts` key, or `counts` is not a JSON
-  object: `PipelineStage.counts` for the upload stage remains `null`, exactly one concise
-  non-secret warning is appended to `pipeline.json.warnings`, and pipeline exit behavior
-  is unchanged.
-- `PipelineReport.summary` is populated from `upload.json.counts` only when `counts` is a
-  valid JSON object; it is `{}` otherwise.
-- When populated, `summary` contains exactly:
+- Counts aggregation into `pipeline.json` is non-fatal for all stages. If a stage
+  manifest is missing, unreadable, invalid JSON, or lacks the expected structure:
+  `PipelineStage.counts` for that stage remains `null`, exactly one concise non-secret
+  warning is appended to `pipeline.json.warnings`, and pipeline exit behavior is
+  unchanged.
+- `PipelineStage.counts` may be populated for fetch, convert, match, and upload stages
+  when their respective manifests are valid. Aggregation is skipped for any stage that
+  did not execute (i.e., was skipped due to a prior stage failure).
+- `PipelineReport.summary` accumulates counts from all four stages. It is `{}` if no
+  stage produces valid counts.
+- When all stages run and produce valid manifests, `summary` contains:
+  `fetch_total`,
+  `convert_total`, `convert_ok`, `convert_skip_exists`, `convert_dry_run`,
+  `convert_ffmpeg_error`,
+  `match_total`, `match_lookup_ok`, `match_lookup_failed`,
   `upload_total`, `upload_sent_ok`, `upload_skipped_parse`, `upload_skipped_validation`,
   `upload_skipped_prepare`, `upload_send_error`.
-- All `summary` values are numeric integers. Non-numeric values in `upload.json.counts`
-  fields are treated as `0`; individual field coercion failures do not produce warnings.
+- Any subset of these keys may be absent if the corresponding stage was skipped or its
+  manifest was invalid; absent keys do not affect pipeline status or exit behavior.
+- All `summary` values are numeric integers. Non-numeric source values are treated as
+  `0`; individual field coercion failures do not produce warnings.
 - `summary` must not include record IDs, file paths, debtor data, agent data, secrets,
-  or any PII sourced from `upload.json`.
-- `PipelineStage.counts` is currently populated only for the upload stage.
-  Fetch, convert, and match stage counts remain `null` until a future explicitly
-  authorized phase implements those aggregations.
+  item arrays, or any PII sourced from stage manifests.
+- `partial` is controlled solely by `upload_send_error > 0` in `upload.json.counts`.
+  Fetch, convert, and match counts do not trigger `partial`.
 
 ---
 
