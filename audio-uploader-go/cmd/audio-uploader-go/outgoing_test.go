@@ -329,3 +329,47 @@ func TestValidateOutgoing_NilFfprobeOK_Passes(t *testing.T) {
 		t.Errorf("expected valid for nil ffprobe_ok, got rejected: %s", reason)
 	}
 }
+
+// --- MAF placa optional tests ---
+
+func TestBuildOutgoing_Maf_NullPlacaBecomesEmptyString(t *testing.T) {
+	m := makeMafMatched()
+	m.Data["placa"] = nil
+	out, _, _ := buildOutgoing(m)
+	if out["placa"] != "" {
+		t.Errorf("null placa should become \"\", got %v", out["placa"])
+	}
+}
+
+func TestBuildOutgoing_Maf_MissingPlacaBecomesEmptyString(t *testing.T) {
+	m := makeMafMatched()
+	delete(m.Data, "placa")
+	out, _, _ := buildOutgoing(m)
+	if out["placa"] != "" {
+		t.Errorf("missing placa should become \"\", got %v", out["placa"])
+	}
+}
+
+func TestValidateOutgoing_Maf_AllowsEmptyPlaca(t *testing.T) {
+	m := makeMafMatched()
+	m.Data["placa"] = ""
+	out, required, optional := buildOutgoing(m)
+	ok, reason := validateOutgoing(m, out, required, optional)
+	if !ok {
+		t.Errorf("expected valid maf payload with empty placa, got rejected: %s", reason)
+	}
+}
+
+func TestValidateOutgoing_Maf_StillRejectsOtherRequiredField(t *testing.T) {
+	m := makeMafMatched()
+	m.Data["placa"] = ""
+	out, required, optional := buildOutgoing(m)
+	delete(out, "documento")
+	ok, reason := validateOutgoing(m, out, required, optional)
+	if ok {
+		t.Errorf("expected rejection when documento is missing")
+	}
+	if !strings.Contains(reason, "documento") {
+		t.Errorf("expected reason to mention 'documento', got %q", reason)
+	}
+}

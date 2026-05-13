@@ -33,53 +33,72 @@ func envOr(k, def string) string {
   return def
 }
 
-func readSecretEnv(path string) {
-  b, err := os.ReadFile(path)
-  if err != nil {
-    return
-  }
-  lines := strings.Split(string(b), "\n")
-  for _, ln := range lines {
-    ln = strings.TrimSpace(ln)
-    if ln == "" || strings.HasPrefix(ln, "#") {
-      continue
-    }
-    kv := strings.SplitN(ln, "=", 2)
-    if len(kv) != 2 {
-      continue
-    }
-    os.Setenv(strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1]))
-  }
+type SFTPConfig struct {
+  Host       string
+  Port       string
+  User       string
+  Password   string
+  RemoteBase string
+  HostKeyRaw string
 }
 
-func sftpConnect() (*sftp.Client, error) {
-  host := envOr("SFTP_HOST", "")
-  if host == "" {
-    return nil, fmt.Errorf("SFTP_HOST requerido")
+func parseSFTPConfig(secretPath string) (SFTPConfig, error) {
+  cfg := SFTPConfig{Port: "22", RemoteBase: "/incoming"}
+  if b, err := os.ReadFile(secretPath); err == nil {
+    for _, ln := range strings.Split(string(b), "\n") {
+      ln = strings.TrimSpace(ln)
+      if ln == "" || strings.HasPrefix(ln, "#") {
+        continue
+      }
+      kv := strings.SplitN(ln, "=", 2)
+      if len(kv) != 2 {
+        continue
+      }
+      k, v := strings.TrimSpace(kv[0]), strings.TrimSpace(kv[1])
+      switch k {
+      case "SFTP_HOST":        cfg.Host = v
+      case "SFTP_PORT":        cfg.Port = v
+      case "SFTP_USER":        cfg.User = v
+      case "SFTP_PASSWORD":    cfg.Password = v
+      case "SFTP_REMOTE_BASE": cfg.RemoteBase = v
+      case "SFTP_HOST_KEY":    cfg.HostKeyRaw = v
+      }
+    }
   }
-  port := envOr("SFTP_PORT", "22")
-  user := envOr("SFTP_USER", "")
-  pass := envOr("SFTP_PASSWORD", "")
-  if user == "" || pass == "" {
-    return nil, fmt.Errorf("SFTP_USER/SFTP_PASSWORD requeridos")
+  if v := os.Getenv("SFTP_HOST");        v != "" { cfg.Host = v }
+  if v := os.Getenv("SFTP_PORT");        v != "" { cfg.Port = v }
+  if v := os.Getenv("SFTP_USER");        v != "" { cfg.User = v }
+  if v := os.Getenv("SFTP_PASSWORD");    v != "" { cfg.Password = v }
+  if v := os.Getenv("SFTP_REMOTE_BASE"); v != "" { cfg.RemoteBase = v }
+  if v := os.Getenv("SFTP_HOST_KEY");    v != "" { cfg.HostKeyRaw = v }
+  if cfg.Host == "" {
+    return SFTPConfig{}, fmt.Errorf("SFTP_HOST requerido")
   }
+  if cfg.User == "" {
+    return SFTPConfig{}, fmt.Errorf("SFTP_USER requerido")
+  }
+  if cfg.Password == "" {
+    return SFTPConfig{}, fmt.Errorf("SFTP_PASSWORD requerido")
+  }
+  if cfg.HostKeyRaw == "" {
+    return SFTPConfig{}, fmt.Errorf("SFTP_HOST_KEY requerido (formato OpenSSH authorized_keys: ssh-ed25519 AAAA... sftp-host)")
+  }
+  return cfg, nil
+}
 
-  hostKeyStr := envOr("SFTP_HOST_KEY", "")
-  if hostKeyStr == "" {
-    return nil, fmt.Errorf("SFTP_HOST_KEY requerido (formato OpenSSH authorized_keys: ssh-ed25519 AAAA... sftp-host)")
-  }
-  pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(hostKeyStr))
+func sftpConnect(cfg SFTPConfig) (*sftp.Client, error) {
+  pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(cfg.HostKeyRaw))
   if err != nil {
     return nil, fmt.Errorf("SFTP_HOST_KEY inválido: %w", err)
   }
 
-  cfg := &ssh.ClientConfig{
-    User:            user,
-    Auth:            []ssh.AuthMethod{ssh.Password(pass)},
+  sshCfg := &ssh.ClientConfig{
+    User:            cfg.User,
+    Auth:            []ssh.AuthMethod{ssh.Password(cfg.Password)},
     HostKeyCallback: ssh.FixedHostKey(pubKey),
     Timeout:         20 * time.Second,
   }
-  conn, err := ssh.Dial("tcp", host+":"+port, cfg)
+  conn, err := ssh.Dial("tcp", cfg.Host+":"+cfg.Port, sshCfg)
   if err != nil {
     return nil, err
   }
@@ -264,7 +283,7 @@ func buildOutgoing(m *Matched) (map[string]any, []string, []string) {
   	// generales + campos propios del cliente (data maf), pero normalizando compromiso a nombres estándar
 	  mafKeys := []string{
   	  "n_cuota", "concatenado", "fec_vencimiento", "moneda", "monto_cuota",
-    	"ultimo_tramo", "categoria", "placa", "documento", "deudor", "nid_opecodout",
+    	"ultimo_tramo", "categoria", "documento", "deudor", "nid_opecodout",
 	  }
 
   	for _, k := range mafKeys {
@@ -273,6 +292,13 @@ func buildOutgoing(m *Matched) (map[string]any, []string, []string) {
 	    } else {
   	    out[k] = nil
     	}
+	  }
+
+  	// placa es opcional: null/ausente/"" → ""
+	  if v, ok := getData(m.Data, "placa"); ok {
+  	  out["placa"] = v
+	  } else {
+  	  out["placa"] = ""
 	  }
 
   	// Normalizar moneda: 1->SOLES, 2->DOLARES (requerido)
@@ -420,11 +446,6 @@ func main() {
     a.RunID = time.Now().UTC().Format("20060102T150405Z")
   }
 
-  // SFTP env solo se necesita si no es dry-run
-  if !a.DryRun {
-    readSecretEnv("/run/secrets/sftp-env")
-  }
-
   runDir := filepath.Join(a.SharedRoot, "runs", a.Client, a.Date, a.RunID)
   matchedDir := filepath.Join(runDir, "matched")
   wavDir := filepath.Join(runDir, "wav")
@@ -448,14 +469,16 @@ func main() {
   }
 
   var s *sftp.Client
-  var err error
-
-  remoteBase := envOr("SFTP_REMOTE_BASE", "/incoming")
-  remoteJson := filepath.ToSlash(filepath.Join(remoteBase, a.Client, a.Date, "json"))
-  remoteAud := filepath.ToSlash(filepath.Join(remoteBase, a.Client, a.Date, "audios"))
+  var remoteJson, remoteAud string
 
   if !a.DryRun {
-    s, err = sftpConnect()
+    cfg, err := parseSFTPConfig("/run/secrets/sftp-env")
+    if err != nil {
+      log.Fatalf("sftp config: %v", err)
+    }
+    remoteJson = filepath.ToSlash(filepath.Join(cfg.RemoteBase, a.Client, a.Date, "json"))
+    remoteAud = filepath.ToSlash(filepath.Join(cfg.RemoteBase, a.Client, a.Date, "audios"))
+    s, err = sftpConnect(cfg)
     if err != nil {
       log.Fatalf("sftp connect: %v", err)
     }
