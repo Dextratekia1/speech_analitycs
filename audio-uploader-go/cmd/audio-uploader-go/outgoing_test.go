@@ -275,6 +275,24 @@ func TestValidateOutgoing_RejectsDescripRptaOTRO(t *testing.T) {
 	}
 }
 
+func TestValidateOutgoing_RejectsDescripRptaOTROWhitespacePadded(t *testing.T) {
+	// "OTRO" with surrounding whitespace must be rejected the same as exact "OTRO".
+	// Without TrimSpace on the OTRO check, "OTRO " would incorrectly pass validation.
+	cases := []string{"OTRO ", " OTRO", " OTRO "}
+	for _, val := range cases {
+		m := makeNaturaMatched()
+		m.Rpta.DescripRpta = val
+		out, required, optional := buildOutgoing(m)
+		ok, reason := validateOutgoing(m, out, required, optional)
+		if ok {
+			t.Errorf("descrip_rpta=%q: expected rejection, but was accepted", val)
+		}
+		if reason != "descrip_rpta=OTRO" {
+			t.Errorf("descrip_rpta=%q: expected reason 'descrip_rpta=OTRO', got %q", val, reason)
+		}
+	}
+}
+
 func TestValidateOutgoing_RejectsMissingRequired(t *testing.T) {
 	m := makeNaturaMatched()
 	out, required, optional := buildOutgoing(m)

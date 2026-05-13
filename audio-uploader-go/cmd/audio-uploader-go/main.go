@@ -344,7 +344,7 @@ func validateOutgoing(m *Matched, out map[string]any, required []string, optiona
   if strings.TrimSpace(out["descrip_rpta"].(string)) == "" {
     return false, "descrip_rpta vacío"
   }
-  if out["descrip_rpta"].(string) == "OTRO" {
+  if strings.TrimSpace(out["descrip_rpta"].(string)) == "OTRO" {
     return false, "descrip_rpta=OTRO"
   }
 
