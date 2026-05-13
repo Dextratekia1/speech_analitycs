@@ -86,6 +86,10 @@ func parseSFTPConfig(secretPath string) (SFTPConfig, error) {
   return cfg, nil
 }
 
+func hostKeyAlgorithmsFor(pubKey ssh.PublicKey) []string {
+  return []string{pubKey.Type()}
+}
+
 func sftpConnect(cfg SFTPConfig) (*sftp.Client, error) {
   pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(cfg.HostKeyRaw))
   if err != nil {
@@ -93,10 +97,11 @@ func sftpConnect(cfg SFTPConfig) (*sftp.Client, error) {
   }
 
   sshCfg := &ssh.ClientConfig{
-    User:            cfg.User,
-    Auth:            []ssh.AuthMethod{ssh.Password(cfg.Password)},
-    HostKeyCallback: ssh.FixedHostKey(pubKey),
-    Timeout:         20 * time.Second,
+    User:              cfg.User,
+    Auth:              []ssh.AuthMethod{ssh.Password(cfg.Password)},
+    HostKeyCallback:   ssh.FixedHostKey(pubKey),
+    HostKeyAlgorithms: hostKeyAlgorithmsFor(pubKey),
+    Timeout:           20 * time.Second,
   }
   conn, err := ssh.Dial("tcp", cfg.Host+":"+cfg.Port, sshCfg)
   if err != nil {

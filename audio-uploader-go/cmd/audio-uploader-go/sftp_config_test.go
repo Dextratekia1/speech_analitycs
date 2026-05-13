@@ -1,10 +1,16 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // fakeHostKey is a syntactically arbitrary string accepted by parseSFTPConfig.
@@ -199,5 +205,72 @@ func TestParseSFTPConfig_IgnoresBlankCommentsAndUnknownKeys(t *testing.T) {
 	}
 	if cfg.User != "user" {
 		t.Errorf("User: expected 'user', got %q", cfg.User)
+	}
+}
+
+// syntheticECDSAAuthorizedKey generates a synthetic ecdsa-sha2-nistp256 public
+// key in OpenSSH authorized_keys format. The private key is discarded; only the
+// public portion is used. No network, no secrets, no PII.
+func syntheticECDSAAuthorizedKey(t *testing.T) string {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ECDSA key: %v", err)
+	}
+	pub, err := ssh.NewPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal ECDSA public key: %v", err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub)))
+}
+
+// syntheticED25519AuthorizedKey generates a synthetic ssh-ed25519 public key in
+// OpenSSH authorized_keys format. The private key is discarded.
+func syntheticED25519AuthorizedKey(t *testing.T) string {
+	t.Helper()
+	rawPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ED25519 key: %v", err)
+	}
+	pub, err := ssh.NewPublicKey(rawPub)
+	if err != nil {
+		t.Fatalf("marshal ED25519 public key: %v", err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub)))
+}
+
+func TestSFTPHostKeyAlgorithmMatchesParsedKeyType_ECDSA(t *testing.T) {
+	keyStr := syntheticECDSAAuthorizedKey(t)
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(keyStr))
+	if err != nil {
+		t.Fatalf("parse authorized key: %v", err)
+	}
+	algos := hostKeyAlgorithmsFor(pubKey)
+	if len(algos) != 1 {
+		t.Fatalf("expected exactly 1 algorithm, got %d: %v", len(algos), algos)
+	}
+	if algos[0] != "ecdsa-sha2-nistp256" {
+		t.Errorf("expected ecdsa-sha2-nistp256, got %q", algos[0])
+	}
+	if algos[0] != pubKey.Type() {
+		t.Errorf("algorithm %q does not match pubKey.Type() %q", algos[0], pubKey.Type())
+	}
+}
+
+func TestSFTPHostKeyAlgorithmMatchesParsedKeyType_ED25519(t *testing.T) {
+	keyStr := syntheticED25519AuthorizedKey(t)
+	pubKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(keyStr))
+	if err != nil {
+		t.Fatalf("parse authorized key: %v", err)
+	}
+	algos := hostKeyAlgorithmsFor(pubKey)
+	if len(algos) != 1 {
+		t.Fatalf("expected exactly 1 algorithm, got %d: %v", len(algos), algos)
+	}
+	if algos[0] != "ssh-ed25519" {
+		t.Errorf("expected ssh-ed25519, got %q", algos[0])
+	}
+	if algos[0] != pubKey.Type() {
+		t.Errorf("algorithm %q does not match pubKey.Type() %q", algos[0], pubKey.Type())
 	}
 }
