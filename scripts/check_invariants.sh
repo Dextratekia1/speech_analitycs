@@ -100,9 +100,11 @@ while IFS= read -r hit; do
         bad_v2_refs=$((bad_v2_refs + 1))
     fi
 done < <(
+    # Never traverses secrets/ (credentials), shared/ (runtime PII), target/, or .git/.
     grep -rn \
         --include="*.md" --include="*.yml" --include="*.sh" \
         --exclude-dir=.git --exclude-dir=target --exclude-dir=shared \
+        --exclude-dir=secrets \
         -- "run_rangev2" . 2>/dev/null \
         | grep -v "^\./scripts/run_rangev2\.sh:" \
         | grep -v "^\./scripts/check_invariants\.sh:"
