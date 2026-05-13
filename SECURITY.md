@@ -141,7 +141,7 @@ git push, screenshot shared, log file published, etc.):
 ### Migration notes
 
 - **Deployments using `MSSQL_ENCRYPT=false`** (the current default): not affected. TLS is disabled entirely; `MSSQL_TRUST_CERT` is irrelevant.
-- **Deployments using `MSSQL_ENCRYPT=true` with a self-signed or internal CA certificate**: must explicitly add `MSSQL_TRUST_CERT=true` to `secrets/mssql.env`, or configure a proper CA validation path in a future phase.
+- **Deployments using `MSSQL_ENCRYPT=true` with a self-signed or internal CA certificate**: must explicitly add `MSSQL_TRUST_CERT=true` to `secrets/mssql.env`. Current behavior is limited to the documented `MSSQL_ENCRYPT` and `MSSQL_TRUST_CERT` controls.
 - **Unrecognized `MSSQL_TRUST_CERT` values** (neither true/yes/on/1 nor false/no/off/0): resolve to `false` and emit a `WARN`-level log entry. The variable name is logged; the value is not printed.
 
 ### Recommended path

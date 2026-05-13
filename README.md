@@ -35,7 +35,7 @@ caso de éxito como de fallo. Contiene:
 
 - `schema_version: 1`
 - Estado global del pipeline: `ok`, `failed`, o `partial`.
-- Estado por etapa: `ok`, `failed`, `skipped`.
+- Estado por etapa: `pending`, `ok`, `failed`, `skipped`.
 - Resumen de conteos: `fetch_total`, `convert_total`, `match_total`, `upload_sent_ok`,
   `upload_send_error`, etc.
 - `stderr_tail`: fragmento final del stderr capturado para etapas que fallan con stderr
@@ -55,6 +55,19 @@ conteos numéricos.
 - `partial` imprime `run_dir=` y retorna exit 0.
 - `partial` es controlado únicamente por `upload_send_error > 0` en el reporte de upload.
 - Una falla de etapa (exit code ≠ 0) toma precedencia sobre `partial`.
+
+### Estado por etapa
+
+Cada etapa individual (`fetch`, `convert`, `match`, `upload`) registra uno de los
+siguientes estados en `pipeline.json`. Estos valores son distintos del estado global
+del pipeline documentado arriba.
+
+| Status | Significado |
+|---|---|
+| `pending` | Etapa inicializada pero no ejecutada; aparece cuando una etapa anterior falló antes de que esta pudiera comenzar. |
+| `ok` | Etapa completó exitosamente (exit code 0). |
+| `failed` | Etapa salió con error (exit code ≠ 0). |
+| `skipped` | Etapa no ejecutó debido a la falla de una etapa anterior. |
 
 ## Red VPN — prerequisito para ejecuciones reales
 
