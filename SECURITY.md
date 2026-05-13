@@ -123,3 +123,29 @@ git push, screenshot shared, log file published, etc.):
       ```
 - [ ] Audit MSSQL and SFTP server access logs.
 - [ ] If committed to git remote: clean history and force-push.
+
+---
+
+## 7. MSSQL TLS certificate validation (SEC-3)
+
+**Default as of Phase 2C:** `MSSQL_TRUST_CERT` defaults to `false`.
+
+### Behavior by configuration
+
+| `MSSQL_ENCRYPT` | `MSSQL_TRUST_CERT` | Effect |
+|---|---|---|
+| `false` (default) | any | TLS is not negotiated; `MSSQL_TRUST_CERT` has no practical effect. |
+| `true` | `false` (default) | TLS required; server certificate must be valid — connection fails if cert is invalid. |
+| `true` | `true` | TLS required; server certificate is trusted without validation. |
+
+### Migration notes
+
+- **Deployments using `MSSQL_ENCRYPT=false`** (the current default): not affected. TLS is disabled entirely; `MSSQL_TRUST_CERT` is irrelevant.
+- **Deployments using `MSSQL_ENCRYPT=true` with a self-signed or internal CA certificate**: must explicitly add `MSSQL_TRUST_CERT=true` to `secrets/mssql.env`, or configure a proper CA validation path in a future phase.
+- **Unrecognized `MSSQL_TRUST_CERT` values** (neither true/yes/on/1 nor false/no/off/0): resolve to `false` and emit a `WARN`-level log entry. The variable name is logged; the value is not printed.
+
+### Recommended path
+
+The safer long-term configuration is `MSSQL_ENCRYPT=true` with valid certificate validation (`MSSQL_TRUST_CERT=false`). This requires the MSSQL server to present a certificate that chains to a trusted CA inside the container.
+
+Do not put credentials or env-file contents in logs, prompts, tickets, or commits.

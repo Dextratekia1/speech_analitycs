@@ -90,16 +90,17 @@ async fn mssql_connect(env_file: &HashMap<String, String>) -> Result<Client<toki
         .map(|v| parse_bool(&v))
         .unwrap_or(false);
 
-    let trust_cert = env_get("MSSQL_TRUST_CERT", env_file)
-        .map(|v| {
-            let v = v.trim().to_lowercase();
-            if v == "off" || v == "false" || v == "0" {
+    let trust_cert = match env_get("MSSQL_TRUST_CERT", env_file) {
+        None => false,
+        Some(v) => match v.trim().to_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => {
+                tracing::warn!("MSSQL_TRUST_CERT has unrecognized value; defaulting to false");
                 false
-            } else {
-                true
             }
-        })
-        .unwrap_or(true);
+        },
+    };
 
     let mut cfg = Config::new();
     cfg.host(host);
