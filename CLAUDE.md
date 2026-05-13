@@ -173,6 +173,32 @@ Config: `/shared/config/clients/{client}.yml`
 - Do not add `--resume`, `--force`, `pipeline.json`, manifest schema changes, retry
   logic, or new exit codes unless explicitly authorized.
 
+### Pipeline aggregation invariants
+
+- `pipeline.json` `schema_version` is `1`; incrementing requires explicit authorization.
+- `pipeline.json` is always written before `pipeline-runner` exits, whether the pipeline
+  succeeded or failed.
+- `PipelineStage.status` must use only: `pending`, `ok`, `failed`, `skipped`.
+- `PipelineReport.status` must use only: `ok`, `failed`.
+- `run_dir=<path>` is printed to stdout only on full pipeline success.
+- Upload-stage counts aggregation into `pipeline.json` is non-fatal. If `upload.json` is
+  missing, unreadable, invalid JSON, missing the `counts` key, or `counts` is not a JSON
+  object: `PipelineStage.counts` for the upload stage remains `null`, exactly one concise
+  non-secret warning is appended to `pipeline.json.warnings`, and pipeline exit behavior
+  is unchanged.
+- `PipelineReport.summary` is populated from `upload.json.counts` only when `counts` is a
+  valid JSON object; it is `{}` otherwise.
+- When populated, `summary` contains exactly:
+  `upload_total`, `upload_sent_ok`, `upload_skipped_parse`, `upload_skipped_validation`,
+  `upload_skipped_prepare`, `upload_send_error`.
+- All `summary` values are numeric integers. Non-numeric values in `upload.json.counts`
+  fields are treated as `0`; individual field coercion failures do not produce warnings.
+- `summary` must not include record IDs, file paths, debtor data, agent data, secrets,
+  or any PII sourced from `upload.json`.
+- `PipelineStage.counts` is currently populated only for the upload stage.
+  Fetch, convert, and match stage counts remain `null` until a future explicitly
+  authorized phase implements those aggregations.
+
 ---
 
 ## Forbidden commands (always)
