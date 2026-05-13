@@ -14,6 +14,7 @@ COPY pipeline-runner/ ./pipeline-runner/
 # Package names:
 #   crates/common/Cargo.toml  → name = "audios_common"
 #   metadata-matcher-rs/Cargo.toml → name = "metadata-matcher-rs"
-RUN cargo test -p audios_common -p metadata-matcher-rs --no-run
+#   pipeline-runner/Cargo.toml → name = "pipeline-runner"
+RUN cargo test -p audios_common -p metadata-matcher-rs -p pipeline-runner --no-run
 
-CMD ["cargo", "test", "-p", "audios_common", "-p", "metadata-matcher-rs", "--", "--nocapture"]
+CMD ["cargo", "test", "-p", "audios_common", "-p", "metadata-matcher-rs", "-p", "pipeline-runner", "--", "--nocapture"]
