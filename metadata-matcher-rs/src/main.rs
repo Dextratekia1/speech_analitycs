@@ -70,6 +70,24 @@ fn parse_bool(s: &str) -> bool {
     matches!(s.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on")
 }
 
+fn parse_mssql_trust_cert(raw: Option<&str>) -> bool {
+    match raw {
+        None => false,
+        Some(v) => match v.trim().to_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => {
+                tracing::warn!("MSSQL_TRUST_CERT has unrecognized value; defaulting to false");
+                false
+            }
+        },
+    }
+}
+
+fn parse_mssql_encrypt(raw: Option<&str>) -> bool {
+    raw.map(parse_bool).unwrap_or(false)
+}
+
 async fn mssql_connect(env_file: &HashMap<String, String>) -> Result<Client<tokio_util::compat::Compat<TcpStream>>> {
     let host = env_get("MSSQL_HOST", env_file).ok_or_else(|| anyhow!("MSSQL_HOST requerido"))?;
     let port: u16 = env_get("MSSQL_PORT", env_file)
@@ -86,21 +104,8 @@ async fn mssql_connect(env_file: &HashMap<String, String>) -> Result<Client<toki
         .or_else(|| env_get("MSSQL_DB", env_file))
         .unwrap_or_else(|| "aval_cob".into());
 
-    let encrypt = env_get("MSSQL_ENCRYPT", env_file)
-        .map(|v| parse_bool(&v))
-        .unwrap_or(false);
-
-    let trust_cert = match env_get("MSSQL_TRUST_CERT", env_file) {
-        None => false,
-        Some(v) => match v.trim().to_lowercase().as_str() {
-            "1" | "true" | "yes" | "on" => true,
-            "0" | "false" | "no" | "off" => false,
-            _ => {
-                tracing::warn!("MSSQL_TRUST_CERT has unrecognized value; defaulting to false");
-                false
-            }
-        },
-    };
+    let encrypt = parse_mssql_encrypt(env_get("MSSQL_ENCRYPT", env_file).as_deref());
+    let trust_cert = parse_mssql_trust_cert(env_get("MSSQL_TRUST_CERT", env_file).as_deref());
 
     let mut cfg = Config::new();
     cfg.host(host);
@@ -765,5 +770,70 @@ mod tests {
         let after_insert = &sql[insert_pos..];
         assert!(after_insert.contains(",\n"), "intermediate rows should end with ','");
         assert!(after_insert.contains(";\n"), "last row should end with ';'");
+    }
+
+    // --- MSSQL TLS config parsing ---
+
+    #[test]
+    fn test_parse_bool_truthy_values() {
+        // parse_bool uses .to_lowercase(); mixed-case variants like "TRUE" are also truthy.
+        for &s in &["1", "true", "yes", "on", "TRUE", "True"] {
+            assert!(parse_bool(s), "expected parse_bool({s:?}) == true");
+        }
+    }
+
+    #[test]
+    fn test_parse_bool_falsy_and_unrecognized_values() {
+        // "TRUE" is absent here: parse_bool is case-insensitive so "TRUE" -> true (see truthy test).
+        for &s in &["0", "false", "no", "off", "garbage", ""] {
+            assert!(!parse_bool(s), "expected parse_bool({s:?}) == false");
+        }
+    }
+
+    #[test]
+    fn test_parse_mssql_trust_cert_absent_defaults_false() {
+        assert!(!parse_mssql_trust_cert(None));
+    }
+
+    #[test]
+    fn test_parse_mssql_trust_cert_truthy_values() {
+        for &s in &["1", "true", "yes", "on"] {
+            assert!(parse_mssql_trust_cert(Some(s)), "expected true for {s:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_mssql_trust_cert_falsy_values() {
+        for &s in &["0", "false", "no", "off"] {
+            assert!(!parse_mssql_trust_cert(Some(s)), "expected false for {s:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_mssql_trust_cert_unrecognized_defaults_false() {
+        // tracing::warn! fires but is not assertable without additional crates.
+        // Static verification confirms the warn message does not interpolate the raw value.
+        for &s in &["garbage", "", "maybe", "2"] {
+            assert!(!parse_mssql_trust_cert(Some(s)), "expected false for unrecognized {s:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_mssql_encrypt_absent_defaults_false() {
+        assert!(!parse_mssql_encrypt(None));
+    }
+
+    #[test]
+    fn test_parse_mssql_encrypt_truthy_values() {
+        for &s in &["1", "true", "yes", "on"] {
+            assert!(parse_mssql_encrypt(Some(s)), "expected true for {s:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_mssql_encrypt_false_and_unrecognized_values() {
+        for &s in &["0", "false", "no", "off", "garbage", ""] {
+            assert!(!parse_mssql_encrypt(Some(s)), "expected false for {s:?}");
+        }
     }
 }
