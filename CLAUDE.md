@@ -100,6 +100,9 @@ Config: `/shared/config/clients/{client}.yml`
 - `shared/runs/` contains runtime PII (debtor names, phone numbers, debt data,
   agent names). Do not read individual record files unless strictly required
   by the authorized task. Never commit or print PII.
+- Do not stage, commit, or push `logs/`, audio files (`*.gsm`, `*.wav`), zip
+  snapshots, or any `shared/runs/` runtime artifacts.
+- Do not use `shared/runs/` real data as test fixtures.
 
 ### SFTP host key
 - `ssh.InsecureIgnoreHostKey()` is **forbidden**.
@@ -107,6 +110,8 @@ Config: `/shared/config/clients/{client}.yml`
   `SFTP_HOST_KEY` (OpenSSH authorized_keys format, from the sftp-env secret).
 - The non-dry-run path must fail closed if `SFTP_HOST_KEY` is missing or invalid.
 - The dry-run path must not require `SFTP_HOST_KEY`.
+- SFTP credentials must not be placed in process-global environment via `os.Setenv`.
+- SFTP config must flow through an explicit `SFTPConfig` struct (`audio-uploader-go`).
 
 ### Validation model — container-first
 
@@ -132,6 +137,29 @@ Config: `/shared/config/clients/{client}.yml`
 - Do not run the live pipeline (fetcher/converter/matcher/uploader) against
   real MSSQL, SFTP, or HTTP audio servers.
 - Do not create commits or push unless explicitly authorized.
+
+### MSSQL TLS
+- `MSSQL_TRUST_CERT` defaults to `false`; unrecognized values also resolve to `false`.
+- Do not change `MSSQL_ENCRYPT` behavior without explicit authorization.
+- CA-file certificate validation is not implemented; do not imply or add it.
+
+### Test harnesses
+- Rust tests run through `Containerfile.test-rust` (covers `audios_common` + `metadata-matcher-rs`).
+- Go tests run through `Containerfile.test-go` (covers `audio-uploader-go`).
+- All test fixtures must be synthetic. No real PII, real phone numbers, real debt
+  values, real names, real audio recordings, or data from `shared/runs/`.
+
+### Uploader validation
+- `descrip_rpta` values equal to `"OTRO"` after `strings.TrimSpace` must be rejected.
+- For MAF, `placa` null/missing/empty must not block upload; it is emitted as `""`.
+- All other MAF required fields remain required unless a future phase explicitly changes them.
+
+### Pipeline-runner forwarding
+- `--clients-dir` is accepted by `pipeline-runner` and forwarded only to
+  `audio-fetcher-rs` and `metadata-matcher-rs`.
+- Do not forward `--clients-dir` to `audio-converter-rs` or `audio-uploader-go` (unsupported).
+- Do not add `--resume`, `--force`, `pipeline.json`, manifest schema changes, retry
+  logic, or new exit codes unless explicitly authorized.
 
 ---
 
