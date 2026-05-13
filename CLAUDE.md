@@ -112,6 +112,13 @@ Config: `/shared/config/clients/{client}.yml`
 - The dry-run path must not require `SFTP_HOST_KEY`.
 - SFTP credentials must not be placed in process-global environment via `os.Setenv`.
 - SFTP config must flow through an explicit `SFTPConfig` struct (`audio-uploader-go`).
+- `ssh.ClientConfig.HostKeyAlgorithms` must be pinned to `[]string{pubKey.Type()}` where
+  `pubKey` is the result of parsing `SFTP_HOST_KEY` via `ssh.ParseAuthorizedKey`.
+- SFTP host key algorithm negotiation must follow the `SFTP_HOST_KEY` key type; it must
+  not depend on `crypto/ssh` default algorithm ordering.
+- The server must present a key matching both the algorithm type and the key value of the
+  pinned `SFTP_HOST_KEY`; if either does not match, the connection must fail closed.
+- Do not add fallback host key algorithms unless explicitly authorized by a future phase.
 
 ### Validation model — container-first
 
