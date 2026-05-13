@@ -10,6 +10,7 @@ use std::{fs, path::{Path, PathBuf}, process::Command};
 // Pipeline-level status values.
 const PIPELINE_STATUS_OK: &str = "ok";
 const PIPELINE_STATUS_FAILED: &str = "failed";
+const PIPELINE_STATUS_PARTIAL: &str = "partial";
 
 // Stage-level status values.
 const STAGE_STATUS_PENDING: &str = "pending";
@@ -187,6 +188,16 @@ fn summarize_upload_counts(counts: Option<&Value>) -> Value {
     })
 }
 
+// Returns true only when summary contains upload_send_error as a numeric value > 0.
+// Returns false for missing, zero, negative, non-numeric, or null values.
+fn detect_partial_upload_success(summary: &Value) -> bool {
+    summary
+        .get("upload_send_error")
+        .and_then(|v| v.as_u64())
+        .map(|n| n > 0)
+        .unwrap_or(false)
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -355,6 +366,13 @@ fn main() -> Result<()> {
         } else if let Some(w) = warn {
             report_warnings.push(w);
         }
+    }
+
+    // Partial: all stages exited 0 but upload_send_error > 0.
+    // Stage failure takes precedence: only promote to partial when status is ok.
+    if report_status == PIPELINE_STATUS_OK && detect_partial_upload_success(&report_summary) {
+        report_status = PIPELINE_STATUS_PARTIAL.to_string();
+        report_warnings.push("upload partial success: upload_send_error > 0".to_string());
     }
 
     let pipeline_finished_at = Utc::now().to_rfc3339();
@@ -722,5 +740,36 @@ mod tests {
         assert_eq!(summary["upload_skipped_parse"].as_u64().unwrap(), 0);
         assert_eq!(summary["upload_skipped_validation"].as_u64().unwrap(), 0);
         assert_eq!(summary["upload_skipped_prepare"].as_u64().unwrap(), 0);
+    }
+
+    // --- detect_partial_upload_success / PIPELINE_STATUS_PARTIAL tests ---
+
+    #[test]
+    fn test_pipeline_status_constants_include_partial() {
+        assert_eq!(PIPELINE_STATUS_PARTIAL, "partial");
+    }
+
+    #[test]
+    fn test_detect_partial_upload_success_send_error_positive() {
+        let summary = json!({"upload_send_error": 1u64});
+        assert!(detect_partial_upload_success(&summary));
+    }
+
+    #[test]
+    fn test_detect_partial_upload_success_send_error_zero() {
+        let summary = json!({"upload_send_error": 0u64});
+        assert!(!detect_partial_upload_success(&summary));
+    }
+
+    #[test]
+    fn test_detect_partial_upload_success_missing_summary_field() {
+        let summary = json!({});
+        assert!(!detect_partial_upload_success(&summary));
+    }
+
+    #[test]
+    fn test_detect_partial_upload_success_non_numeric_send_error() {
+        let summary = json!({"upload_send_error": "1"});
+        assert!(!detect_partial_upload_success(&summary));
     }
 }
