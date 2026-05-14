@@ -53,7 +53,9 @@ Test SFTP:
                             Must not be a production secret path.
 
 Conversion concurrency:
-  --conversion-concurrency <N>    Override audio-converter-rs thread pool size (default: 2).
+  --conversion-concurrency <N>    Thread pool size for audio-converter-rs.
+                                  Operational runner default: 4 (based on OPS-R5 benchmark).
+                                  audio-converter-rs internal default: 2 (direct invocation).
                                   N must be a positive integer (≥ 1).
 
 Run label:
@@ -95,7 +97,8 @@ END_DATE=""
 PIPELINE_MODE="full"
 BUILD=0
 TEST_SFTP_ENV=""
-CONVERSION_CONCURRENCY=""
+# Operational default: 4 (OPS-R5 benchmark). audio-converter-rs internal default is 2.
+CONVERSION_CONCURRENCY="4"
 RUN_LABEL=""
 
 while [[ $# -gt 0 ]]; do

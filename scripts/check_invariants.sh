@@ -395,6 +395,26 @@ check_present \
 echo ""
 
 # ==========================================================================
+echo "--- [14] OPS-21 operational concurrency default anchors ---"
+# Verify that scripts/run_pipeline.sh defaults to conversion concurrency 4,
+# README documents it, and no auto/unlimited CPU mode was introduced.
+check_present \
+    "CONVERSION_CONCURRENCY=4 default in scripts/run_pipeline.sh" \
+    'CONVERSION_CONCURRENCY="4"' \
+    "scripts/run_pipeline.sh"
+
+check_present \
+    "operational concurrency default 4 documented in README.md" \
+    "conversion-concurrency.*4" \
+    "README.md"
+
+check_absent \
+    "no num_cpus or unlimited mode in scripts/run_pipeline.sh" \
+    "num_cpus\|unlimited" \
+    "scripts/run_pipeline.sh"
+echo ""
+
+# ==========================================================================
 echo "--- Summary ---"
 if [[ "$failures" -eq 0 ]]; then
     echo "All checks PASSED (0 failures)."

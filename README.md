@@ -130,7 +130,7 @@ scripts/run_pipeline.sh --sftp-mode dry-run --date 2026-05-14 --build
 --mode <full|fetch|convert|match|upload>   Etapas a ejecutar. Default: full.
 --build                             Reconstruir imágenes antes de ejecutar.
 --test-sftp-env <ruta>              Archivo de credenciales SFTP sintéticas (requerido con --sftp-mode test).
---conversion-concurrency <N>        Override de concurrencia de audio-converter-rs (default: 2). N ≥ 1.
+--conversion-concurrency <N>        Concurrencia del convertidor. Default del runner operativo: 4 (benchmark OPS-R5). N ≥ 1. Default interno de audio-converter-rs: 2.
 --run-label <LABEL>                 Etiqueta opcional para el run ID (ej: 'cc4'). Permite runs
                                     repetidos para el mismo cliente/fecha sin sobreescribir resultados
                                     previos. 1-32 chars: letras, dígitos, '-', '_'. Sin barras ni PII.
@@ -138,6 +138,21 @@ scripts/run_pipeline.sh --sftp-mode dry-run --date 2026-05-14 --build
 ```
 
 Ver `scripts/run_pipeline.sh --help` para la referencia completa.
+
+### Concurrencia del convertidor — default operativo
+
+`scripts/run_pipeline.sh` usa `--conversion-concurrency 4` por defecto, basado en el benchmark OPS-R5 (2026-05-13):
+
+| Cliente | cc2 (OPS-R4) | cc4 (OPS-R5) | Mejora |
+|---|---|---|---|
+| maf (917 archivos) | 57,807 ms | 32,408 ms | −43.9% |
+| natura (20 archivos) | 1,444 ms | 770 ms | −46.7% |
+
+Sin aumento en `convert_ffmpeg_error`. Sin errores de upload.
+
+El default interno de `audio-converter-rs` permanece en `2` cuando se invoca directamente sin pasar por este script. El script siempre pasa el valor explícito al pipeline-runner y al converter.
+
+Para hacer override: `--conversion-concurrency <N>` (N ≥ 1). Valores superiores a 4 (ej: `8`) deben ser benchmarked por separado antes de adoptarse.
 
 ### Benchmarks repetidos — --run-label
 
