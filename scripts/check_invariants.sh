@@ -454,6 +454,95 @@ check_present \
 echo ""
 
 # ==========================================================================
+echo "--- [16] OPS-D2 production deployment anchors ---"
+# Verify production deployment files exist and satisfy key safety constraints.
+
+for _f in "scripts/run_production.sh" \
+          "deploy/audios-natura-pipeline.service" \
+          "deploy/audios-natura-pipeline.timer" \
+          "deploy/audios-natura-cleanup.sh" \
+          "DEPLOY.md"; do
+    if [[ -f "$_f" ]]; then
+        pass "$_f exists"
+    else
+        fail "$_f missing"
+    fi
+done
+unset _f
+
+# run_production.sh: must lock to real SFTP and set network mode
+check_present \
+    "run_production.sh locked to --sftp-mode real" \
+    "sftp-mode real" \
+    "scripts/run_production.sh"
+
+check_present \
+    "run_production.sh sets PIPELINE_NETWORK_MODE" \
+    "PIPELINE_NETWORK_MODE" \
+    "scripts/run_production.sh"
+
+check_absent \
+    "run_production.sh does not use test sftp" \
+    "sftp-mode test" \
+    "scripts/run_production.sh"
+
+# Production service: no :dev, no --build, no test-sftp-env, no work-netns
+check_absent \
+    "production service does not use :dev image" \
+    ":dev" \
+    "deploy/audios-natura-pipeline.service"
+
+check_absent \
+    "production service does not contain --build" \
+    "\-\-build" \
+    "deploy/audios-natura-pipeline.service"
+
+check_absent \
+    "production service does not reference test-sftp-env" \
+    "test-sftp-env" \
+    "deploy/audios-natura-pipeline.service"
+
+check_absent \
+    "production service does not reference work-netns" \
+    "work-netns" \
+    "deploy/audios-natura-pipeline.service"
+
+# Timer: required scheduling
+check_present \
+    "pipeline timer OnCalendar set to 22:00" \
+    "OnCalendar=\*-\*-\* 22:00:00" \
+    "deploy/audios-natura-pipeline.timer"
+
+check_present \
+    "pipeline timer Persistent=true" \
+    "Persistent=true" \
+    "deploy/audios-natura-pipeline.timer"
+
+# Cleanup: retention constants
+check_present \
+    "cleanup script retains runs for 30 days" \
+    "RUNS_RETAIN_DAYS=30" \
+    "deploy/audios-natura-cleanup.sh"
+
+check_present \
+    "cleanup script retains logs for 60 days" \
+    "LOGS_RETAIN_DAYS=60" \
+    "deploy/audios-natura-cleanup.sh"
+
+# Documentation
+check_present \
+    "README.md references DEPLOY.md" \
+    "DEPLOY\.md" \
+    "README.md"
+
+check_present \
+    "DEPLOY.md states no work-netns requirement in production" \
+    "work-netns" \
+    "DEPLOY.md"
+
+echo ""
+
+# ==========================================================================
 echo "--- Summary ---"
 if [[ "$failures" -eq 0 ]]; then
     echo "All checks PASSED (0 failures)."

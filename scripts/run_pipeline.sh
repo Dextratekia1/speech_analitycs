@@ -11,7 +11,7 @@ IMG_FETCHER="localhost/audios-natura/audio-fetcher-rs:dev"
 IMG_CONVERTER="localhost/audios-natura/audio-converter-rs:dev"
 IMG_MATCHER="localhost/audios-natura/metadata-matcher-rs:dev"
 IMG_UPLOADER="localhost/audios-natura/audio-uploader-go:dev"
-IMG_PIPELINE="localhost/audios-natura/pipeline-runner:dev"
+IMG_PIPELINE="${PIPELINE_IMG:-localhost/audios-natura/pipeline-runner:dev}"
 
 MSSQL_SECRET="${MSSQL_SECRET:-mssql-env-v2}"
 SFTP_SECRET="${SFTP_SECRET:-sftp-env}"
@@ -22,8 +22,9 @@ print_usage() {
 Usage: scripts/run_pipeline.sh --sftp-mode <real|test|dry-run> [OPTIONS]
 
 SFTP mode (required):
-  --sftp-mode real       Live production SFTP. Requires work-netns running and
-                         the sftp-env Podman secret registered.
+  --sftp-mode real       Live production SFTP. Requires sftp-env Podman secret.
+                         With PIPELINE_NETWORK_MODE=work-netns (dev default), also
+                         requires work-netns running.
   --sftp-mode test       Test SFTP using a synthetic credential file. Requires
                          --test-sftp-env <path>. Refuses production secret paths.
   --sftp-mode dry-run    No SFTP. Stages run in dry-run mode: no downloads,
@@ -68,6 +69,16 @@ Run label:
                          Labels must not contain paths or PII.
 
   --help    Show this help.
+
+Environment overrides (set before calling this script — no CLI flags):
+  PIPELINE_IMG=<tag>              Image tag for pipeline-runner.
+                                  Default: localhost/audios-natura/pipeline-runner:dev
+                                  Production: :release (set by run_production.sh).
+  PIPELINE_NETWORK_MODE=<mode>    Container network mode.
+                                  work-netns (default): --network container:work-netns.
+                                  default: no explicit --network flag (for production).
+  CLIENTS_FILE=<path>             Path to enabled clients list.
+                                  Default: shared/config/clients/enabled.txt.
 
 Examples:
   # Dry-run for a single date:
@@ -178,10 +189,17 @@ if [[ "$SFTP_MODE" == "test" ]]; then
         die "--test-sftp-env '$TEST_SFTP_ENV': file not found."
 fi
 
-if [[ "$SFTP_MODE" == "real" ]]; then
+# Production-safe network mode. Default: work-netns (dev). Production sets: default.
+PIPELINE_NETWORK_MODE="${PIPELINE_NETWORK_MODE:-work-netns}"
+case "$PIPELINE_NETWORK_MODE" in
+    work-netns|default) ;;
+    *) die "PIPELINE_NETWORK_MODE must be 'work-netns' or 'default'; got: '$PIPELINE_NETWORK_MODE'" ;;
+esac
+
+if [[ "$SFTP_MODE" == "real" && "$PIPELINE_NETWORK_MODE" == "work-netns" ]]; then
     if ! podman inspect -f '{{.State.Running}}' work-netns 2>/dev/null | grep -qx true; then
-        die "work-netns container is not running. Real SFTP mode requires VPN namespace. " \
-            "Start work-netns before running with --sftp-mode real."
+        die "work-netns container is not running. Real SFTP mode with work-netns requires VPN namespace. " \
+            "Start work-netns, or set PIPELINE_NETWORK_MODE=default for production."
     fi
 fi
 
@@ -281,11 +299,15 @@ echo "  mode       : $PIPELINE_MODE"
 [[ "$SFTP_MODE" == "test" ]] && echo "  test-env   : $TEST_SFTP_ENV"
 [[ -n "$CONVERSION_CONCURRENCY" ]] && echo "  concurrency: $CONVERSION_CONCURRENCY"
 [[ -n "$RUN_LABEL" ]] && echo "  run-label  : $RUN_LABEL"
+echo "  network    : $PIPELINE_NETWORK_MODE"
 echo ""
 
 mkdir -p logs shared/runs
 
-NET_REAL="container:work-netns"
+case "$PIPELINE_NETWORK_MODE" in
+    work-netns) NETWORK_ARGS=(--network "container:work-netns") ;;
+    default)    NETWORK_ARGS=() ;;
+esac
 VOL_SHARED="$(pwd)/shared:/shared:Z"
 
 # ---- Stage runner helpers ----
@@ -296,7 +318,7 @@ run_full() {
     case "$SFTP_MODE" in
         real)
             podman run --rm \
-                --network "$NET_REAL" \
+                "${NETWORK_ARGS[@]+"${NETWORK_ARGS[@]}"}" \
                 -v "$VOL_SHARED" \
                 --secret "${MSSQL_SECRET},type=mount" \
                 --secret "${SFTP_SECRET},type=mount" \
@@ -308,7 +330,7 @@ run_full() {
             ;;
         test)
             podman run --rm \
-                --network "$NET_REAL" \
+                "${NETWORK_ARGS[@]+"${NETWORK_ARGS[@]}"}" \
                 -v "$VOL_SHARED" \
                 -v "${TEST_SFTP_ENV}:/run/secrets/test-sftp-env:Z,ro" \
                 --secret "${MSSQL_SECRET},type=mount" \
@@ -338,7 +360,7 @@ run_fetch() {
     local dry_flag=()
     [[ "$SFTP_MODE" == "dry-run" ]] && dry_flag=(--dry-run)
     podman run --rm \
-        --network "$NET_REAL" \
+        "${NETWORK_ARGS[@]+"${NETWORK_ARGS[@]}"}" \
         -v "$VOL_SHARED" \
         -e RUST_LOG=info \
         "$IMG_FETCHER" \
@@ -352,7 +374,7 @@ run_convert() {
     local dry_flag=()
     [[ "$SFTP_MODE" == "dry-run" ]] && dry_flag=(--dry-run)
     podman run --rm \
-        --network "$NET_REAL" \
+        "${NETWORK_ARGS[@]+"${NETWORK_ARGS[@]}"}" \
         -v "$VOL_SHARED" \
         -e RUST_LOG=info \
         "$IMG_CONVERTER" \
@@ -369,7 +391,7 @@ run_match() {
     run_fetch "$client" "$d" "$run_id"
     run_convert "$client" "$d" "$run_id"
     podman run --rm \
-        --network "$NET_REAL" \
+        "${NETWORK_ARGS[@]+"${NETWORK_ARGS[@]}"}" \
         -v "$VOL_SHARED" \
         --secret "${MSSQL_SECRET},type=mount" \
         -e RUST_LOG=info \
@@ -384,7 +406,7 @@ run_upload() {
     case "$SFTP_MODE" in
         real)
             podman run --rm \
-                --network "$NET_REAL" \
+                "${NETWORK_ARGS[@]+"${NETWORK_ARGS[@]}"}" \
                 -v "$VOL_SHARED" \
                 --secret "${SFTP_SECRET},type=mount" \
                 -e RUST_LOG=info \
@@ -393,7 +415,7 @@ run_upload() {
             ;;
         test)
             podman run --rm \
-                --network "$NET_REAL" \
+                "${NETWORK_ARGS[@]+"${NETWORK_ARGS[@]}"}" \
                 -v "$VOL_SHARED" \
                 -v "${TEST_SFTP_ENV}:/run/secrets/test-sftp-env:Z,ro" \
                 -e RUST_LOG=info \

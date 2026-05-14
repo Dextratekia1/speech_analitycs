@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily trigger for audios-natura-pipeline.service at 22:00
+Documentation=file:///opt/audios-natura/DEPLOY.md
+
+[Timer]
+OnCalendar=*-*-* 22:00:00
+Persistent=true
+Unit=audios-natura-pipeline.service
+
+[Install]
+WantedBy=timers.target

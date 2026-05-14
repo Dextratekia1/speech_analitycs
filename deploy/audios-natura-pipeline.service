@@ -1,0 +1,16 @@
+[Unit]
+Description=Audios natura daily pipeline run (production)
+After=network-online.target
+Wants=network-online.target
+Documentation=file:///opt/audios-natura/DEPLOY.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/audios-natura
+Environment=PIPELINE_IMG=localhost/audios-natura/pipeline-runner:release
+Environment=PIPELINE_NETWORK_MODE=default
+ExecStart=/opt/audios-natura/scripts/run_production.sh
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=7200
+RemainAfterExit=no

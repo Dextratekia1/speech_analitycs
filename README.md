@@ -332,6 +332,11 @@ podman secret create mssql-env-v2 ./secrets/mssql.env
 podman secret create sftp-env     ./secrets/sftp.env
 ```
 
+## Deployment en producción
+
+Ver [DEPLOY.md](DEPLOY.md) para instrucciones completas de despliegue en Fedora CoreOS:
+systemd service/timer, imágenes release, secretos Podman, retención de artefactos y rollback.
+
 ## Notas
 - `--date` formato `yyyy-mm-dd`.
 - Tipo 1 usa ventana ±600s.

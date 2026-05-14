@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly retention cleanup for audios-natura artifacts (Sundays 03:00)
+Documentation=file:///opt/audios-natura/DEPLOY.md
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00
+Persistent=true
+Unit=audios-natura-cleanup.service
+
+[Install]
+WantedBy=timers.target

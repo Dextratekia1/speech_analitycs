@@ -1,0 +1,14 @@
+[Unit]
+Description=Audios natura retention cleanup
+Documentation=file:///opt/audios-natura/DEPLOY.md
+Conflicts=audios-natura-pipeline.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/audios-natura
+Environment=AUDIOS_NATURA_ROOT=/opt/audios-natura
+ExecStart=/opt/audios-natura/deploy/audios-natura-cleanup.sh
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=300
+RemainAfterExit=no
