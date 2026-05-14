@@ -35,7 +35,9 @@ Date selection (one required):
   --end   YYYY-MM-DD           End of date range (inclusive). Requires --start.
 
 Client:
-  --client <maf|natura|all>    Clients to process. Default: all.
+  --client <name|all>    Client to process. 'all' loads every entry from
+                         shared/config/clients/enabled.txt.
+                         Default: all. Override file with CLIENTS_FILE env var.
 
 Pipeline mode (stages):
   --mode <full|fetch|convert|match|upload>    Default: full.
@@ -127,10 +129,6 @@ case "$SFTP_MODE" in
     *) die "--sftp-mode must be real, test, or dry-run; got: '$SFTP_MODE'" ;;
 esac
 
-case "$CLIENT" in
-    maf|natura|all) ;;
-    *) die "--client must be maf, natura, or all; got: '$CLIENT'" ;;
-esac
 
 case "$PIPELINE_MODE" in
     full|fetch|convert|match|upload) ;;
@@ -236,12 +234,41 @@ case "$PIPELINE_MODE" in
     upload)  check_image "$IMG_UPLOADER" ;;
 esac
 
-# ---- Client list ----
+# ---- Client discovery from enabled.txt ----
+CLIENTS_FILE="${CLIENTS_FILE:-shared/config/clients/enabled.txt}"
+
+if [[ "$CLIENT" != "all" ]]; then
+    [[ "$CLIENT" =~ ^[a-z0-9_-]+$ ]] || \
+        die "--client must be 'all' or a safe token (lowercase letters, digits, '-', '_'); got: '$CLIENT'"
+fi
+
+[[ -f "$CLIENTS_FILE" ]] || \
+    die "Client list file not found: $CLIENTS_FILE"
+
+mapfile -t ALL_CLIENTS < <(grep -E '^[a-z0-9_-]+$' -- "$CLIENTS_FILE")
+
+[[ "${#ALL_CLIENTS[@]}" -gt 0 ]] || \
+    die "No valid client entries in $CLIENTS_FILE. File must contain at least one client token."
+
+_dup=$(printf '%s\n' "${ALL_CLIENTS[@]}" | sort | uniq -d)
+if [[ -n "$_dup" ]]; then
+    die "Duplicate client '$_dup' in $CLIENTS_FILE. Remove duplicates before running."
+fi
+unset _dup
 
 if [[ "$CLIENT" == "all" ]]; then
-    CLIENTS=("maf" "natura")
+    CLIENTS=("${ALL_CLIENTS[@]}")
 else
-    CLIENTS=("$CLIENT")
+    CLIENTS=()
+    for _c in "${ALL_CLIENTS[@]}"; do
+        if [[ "$_c" == "$CLIENT" ]]; then
+            CLIENTS=("$CLIENT")
+            break
+        fi
+    done
+    [[ "${#CLIENTS[@]}" -gt 0 ]] || \
+        die "--client '$CLIENT' is not listed in $CLIENTS_FILE"
+    unset _c
 fi
 
 # ---- Summary ----

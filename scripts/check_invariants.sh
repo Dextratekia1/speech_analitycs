@@ -415,6 +415,45 @@ check_absent \
 echo ""
 
 # ==========================================================================
+echo "--- [15] OPS-22 enabled.txt client discovery anchors ---"
+# Verify enabled.txt exists and contains the two initial clients.
+# Verify run_pipeline.sh references enabled.txt and validates client tokens.
+# Verify README documents enabled.txt.
+
+if [[ -f "shared/config/clients/enabled.txt" ]]; then
+    pass "shared/config/clients/enabled.txt exists"
+else
+    fail "shared/config/clients/enabled.txt missing"
+fi
+
+check_present \
+    "enabled.txt contains maf" \
+    "^maf$" \
+    "shared/config/clients/enabled.txt"
+
+check_present \
+    "enabled.txt contains natura" \
+    "^natura$" \
+    "shared/config/clients/enabled.txt"
+
+check_present \
+    "scripts/run_pipeline.sh references enabled.txt" \
+    "enabled\.txt" \
+    "scripts/run_pipeline.sh"
+
+check_present \
+    "scripts/run_pipeline.sh validates client token format" \
+    "\[a-z0-9_-\]" \
+    "scripts/run_pipeline.sh"
+
+check_present \
+    "README.md documents enabled.txt" \
+    "enabled\.txt" \
+    "README.md"
+
+echo ""
+
+# ==========================================================================
 echo "--- Summary ---"
 if [[ "$failures" -eq 0 ]]; then
     echo "All checks PASSED (0 failures)."

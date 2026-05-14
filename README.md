@@ -124,7 +124,8 @@ scripts/run_pipeline.sh --sftp-mode dry-run --date 2026-05-14 --build
 
 ```
 --sftp-mode <real|test|dry-run>     Modo SFTP (requerido).
---client <maf|natura|all>           Cliente(s). Default: all.
+--client <name|all>                 Cliente(s). 'all' carga todos los clientes de
+                                    shared/config/clients/enabled.txt. Default: all.
 --date YYYY-MM-DD                   Fecha única.
 --start / --end YYYY-MM-DD          Rango de fechas (inclusivo, mutualmente exclusivo con --date).
 --mode <full|fetch|convert|match|upload>   Etapas a ejecutar. Default: full.
@@ -178,6 +179,46 @@ scripts/run_pipeline.sh \
 ```
 
 Labels válidos: letras, dígitos, `-`, `_`, máximo 32 caracteres. No deben contener rutas ni PII.
+
+### Gestión de clientes — enabled.txt
+
+La lista de clientes habilitados se lee de:
+
+```
+shared/config/clients/enabled.txt
+```
+
+Cada línea es un token de cliente (letras minúsculas, dígitos, `-`, `_`). Las líneas
+en blanco y las que no coincidan con ese patrón se ignoran silenciosamente.
+
+Clientes actuales:
+
+```
+maf
+natura
+```
+
+**Comportamiento de `--client`:**
+
+| Valor | Comportamiento |
+|---|---|
+| `all` | Carga y procesa todos los clientes en `enabled.txt`. |
+| `<nombre>` | Valida que el nombre sea un token seguro y esté listado en `enabled.txt`. |
+
+**Para agregar un nuevo cliente:**
+
+1. Crear y validar `shared/config/clients/<nombre>.yml` con la configuración del cliente.
+2. Verificar que la configuración de SQL y SFTP del cliente esté probada.
+3. Agregar el nombre del cliente en una nueva línea en `enabled.txt`.
+4. Ejecutar `scripts/run_pipeline.sh --sftp-mode dry-run --client <nombre> --date <fecha>`
+   para confirmar que el pipeline lo reconoce antes de hacer runs reales.
+
+**Advertencia:** No agregar un cliente a `enabled.txt` hasta que su configuración esté
+lista y probada. El pipeline procesará el cliente de inmediato en el siguiente run con
+`--client all`.
+
+El archivo de lista puede sobreescribirse para pruebas con la variable de entorno
+`CLIENTS_FILE=/ruta/alternativa/enabled.txt`.
 
 ## Servidor SFTP de prueba — scripts/start_test_sftp.sh
 

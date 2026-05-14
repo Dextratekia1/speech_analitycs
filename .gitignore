@@ -37,3 +37,8 @@ NvChad/
 .orchestrator/outbox/
 .orchestrator/archive/
 .orchestrator/governance-archive/
+
+# ── Orchestrator memory layer ─────────────────────────────────────────────────
+# .orchestrator-memory/ is created by `orchestrator memory-init` and contains
+# a SQLite database (memory.db) with ingested evidence. Runtime artifact only.
+.orchestrator-memory/
