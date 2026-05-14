@@ -81,6 +81,9 @@ struct Args {
 
     #[arg(long, default_value = "/run/secrets/sftp-env")]
     sftp_secret_path: String,
+
+    #[arg(long)]
+    conversion_concurrency: Option<usize>,
 }
 
 fn make_pending_stage(name: &str, command: &str, manifest_path: &str) -> PipelineStage {
@@ -484,6 +487,9 @@ fn main() -> Result<()> {
         ]);
         if args.dry_run {
             c.arg("--dry-run");
+        }
+        if let Some(n) = args.conversion_concurrency {
+            c.args(["--conversion-concurrency", &n.to_string()]);
         }
         let mut st =
             make_pending_stage("convert", "audio-converter-rs", "manifests/convert.json");

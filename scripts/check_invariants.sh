@@ -362,6 +362,20 @@ check_present \
 echo ""
 
 # ==========================================================================
+echo "--- [12] OPS-19 conversion concurrency anchors ---"
+# Verify --conversion-concurrency is present in run_pipeline.sh and pipeline-runner.
+check_present \
+    "--conversion-concurrency present in scripts/run_pipeline.sh" \
+    "conversion.concurrency" \
+    "scripts/run_pipeline.sh"
+
+check_present \
+    "conversion_concurrency present in pipeline-runner/src/main.rs" \
+    "conversion_concurrency" \
+    "pipeline-runner/src/main.rs"
+echo ""
+
+# ==========================================================================
 echo "--- Summary ---"
 if [[ "$failures" -eq 0 ]]; then
     echo "All checks PASSED (0 failures)."

@@ -52,6 +52,10 @@ Test SFTP:
   --test-sftp-env <path>    Synthetic SFTP env file (required for --sftp-mode test).
                             Must not be a production secret path.
 
+Conversion concurrency:
+  --conversion-concurrency <N>    Override audio-converter-rs thread pool size (default: 2).
+                                  N must be a positive integer (≥ 1).
+
   --help    Show this help.
 
 Examples:
@@ -84,6 +88,7 @@ END_DATE=""
 PIPELINE_MODE="full"
 BUILD=0
 TEST_SFTP_ENV=""
+CONVERSION_CONCURRENCY=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -94,7 +99,8 @@ while [[ $# -gt 0 ]]; do
         --end)           END_DATE="$2";        shift 2 ;;
         --mode)          PIPELINE_MODE="$2";   shift 2 ;;
         --build)         BUILD=1;              shift   ;;
-        --test-sftp-env) TEST_SFTP_ENV="$2";  shift 2 ;;
+        --test-sftp-env)           TEST_SFTP_ENV="$2";           shift 2 ;;
+        --conversion-concurrency)  CONVERSION_CONCURRENCY="$2";  shift 2 ;;
         --help|-h)       print_usage; exit 0 ;;
         *) die "Unknown option: $1. Use --help for usage." ;;
     esac
@@ -169,6 +175,15 @@ if [[ "$SFTP_MODE" == "real" ]]; then
     fi
 fi
 
+if [[ -n "$CONVERSION_CONCURRENCY" ]]; then
+    [[ "$CONVERSION_CONCURRENCY" =~ ^[1-9][0-9]*$ ]] || \
+        die "--conversion-concurrency must be a positive integer ≥ 1; got: '$CONVERSION_CONCURRENCY'"
+fi
+
+# Conversion concurrency flag array — forwarded to pipeline-runner and audio-converter-rs.
+CC_ARGS=()
+[[ -n "$CONVERSION_CONCURRENCY" ]] && CC_ARGS=(--conversion-concurrency "$CONVERSION_CONCURRENCY")
+
 # ---- Build images ----
 
 if [[ "$BUILD" -eq 1 ]]; then
@@ -214,6 +229,7 @@ echo "  client(s)  : ${CLIENTS[*]}"
 echo "  date range : $START_DATE — $END_DATE"
 echo "  mode       : $PIPELINE_MODE"
 [[ "$SFTP_MODE" == "test" ]] && echo "  test-env   : $TEST_SFTP_ENV"
+[[ -n "$CONVERSION_CONCURRENCY" ]] && echo "  concurrency: $CONVERSION_CONCURRENCY"
 echo ""
 
 mkdir -p logs shared/runs
@@ -235,7 +251,8 @@ run_full() {
                 --secret "${SFTP_SECRET},type=mount" \
                 -e RUST_LOG=info \
                 "$IMG_PIPELINE" \
-                    --client "$client" --date "$d" --run-id "$run_id"
+                    --client "$client" --date "$d" --run-id "$run_id" \
+                    "${CC_ARGS[@]+"${CC_ARGS[@]}"}"
             ;;
         test)
             podman run --rm \
@@ -246,7 +263,8 @@ run_full() {
                 -e RUST_LOG=info \
                 "$IMG_PIPELINE" \
                     --client "$client" --date "$d" --run-id "$run_id" \
-                    --sftp-secret-path /run/secrets/test-sftp-env
+                    --sftp-secret-path /run/secrets/test-sftp-env \
+                    "${CC_ARGS[@]+"${CC_ARGS[@]}"}"
             ;;
         dry-run)
             podman run --rm \
@@ -254,7 +272,8 @@ run_full() {
                 -e RUST_LOG=info \
                 "$IMG_PIPELINE" \
                     --client "$client" --date "$d" --run-id "$run_id" \
-                    --dry-run
+                    --dry-run \
+                    "${CC_ARGS[@]+"${CC_ARGS[@]}"}"
             ;;
     esac
 }
@@ -284,7 +303,8 @@ run_convert() {
         -e RUST_LOG=info \
         "$IMG_CONVERTER" \
             --client "$client" --date "$d" --run-id "$run_id" \
-            "${dry_flag[@]+"${dry_flag[@]}"}"
+            "${dry_flag[@]+"${dry_flag[@]}"}" \
+            "${CC_ARGS[@]+"${CC_ARGS[@]}"}"
 }
 
 # run_match: fetcher + converter + metadata-matcher-rs.

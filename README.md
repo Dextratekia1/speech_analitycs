@@ -130,6 +130,7 @@ scripts/run_pipeline.sh --sftp-mode dry-run --date 2026-05-14 --build
 --mode <full|fetch|convert|match|upload>   Etapas a ejecutar. Default: full.
 --build                             Reconstruir imágenes antes de ejecutar.
 --test-sftp-env <ruta>              Archivo de credenciales SFTP sintéticas (requerido con --sftp-mode test).
+--conversion-concurrency <N>        Override de concurrencia de audio-converter-rs (default: 2). N ≥ 1.
 --help                              Mostrar ayuda.
 ```
 
