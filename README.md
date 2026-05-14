@@ -135,6 +135,49 @@ scripts/run_pipeline.sh --sftp-mode dry-run --date 2026-05-14 --build
 
 Ver `scripts/run_pipeline.sh --help` para la referencia completa.
 
+## Servidor SFTP de prueba — scripts/start_test_sftp.sh
+
+Para ejecutar el pipeline en modo `--sftp-mode test` se requiere un servidor SFTP
+sintético. El harness de prueba levanta un contenedor con credenciales y host key
+generados en el momento, aislado de producción.
+
+### Inicio
+
+```bash
+# Construir la imagen (solo la primera vez, o si hubo cambios):
+TEST_ENV=$(bash scripts/start_test_sftp.sh --build)
+
+# Si la imagen ya existe:
+TEST_ENV=$(bash scripts/start_test_sftp.sh)
+```
+
+La variable `TEST_ENV` contiene la ruta al archivo de credenciales sintéticas
+(por ejemplo `/tmp/audios-test-sftp-XXXXXX/sftp.env`). No se imprimen los
+contenidos del archivo.
+
+### Ejecutar pipeline en modo test
+
+```bash
+scripts/run_pipeline.sh \
+  --sftp-mode test \
+  --test-sftp-env "$TEST_ENV" \
+  --client all \
+  --date 2026-05-14
+```
+
+### Detener y limpiar
+
+```bash
+bash scripts/stop_test_sftp.sh --cleanup-env "$TEST_ENV"
+```
+
+### Advertencia de seguridad
+
+**Nunca** usar `secrets/sftp.env` ni `/run/secrets/sftp-env` como valor de
+`--test-sftp-env`. El script `run_pipeline.sh` rechaza estas rutas
+explícitamente. El archivo de credenciales de test debe ser sintético y
+generado por `scripts/start_test_sftp.sh`.
+
 ## Ejecución operativa — scripts/run_range.sh (legacy)
 
 `scripts/run_range.sh` es el script heredado. Soporta `MODE=full` y `MODE=match`

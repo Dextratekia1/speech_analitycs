@@ -305,6 +305,63 @@ check_present \
 echo ""
 
 # ==========================================================================
+echo "--- [11] OPS-T2A test SFTP server harness anchors ---"
+# Verify that the test SFTP server harness exists and preserves key safety
+# properties: no InsecureIgnoreHostKey, proper host key generation, container
+# name and network namespace usage consistent with pipeline test mode.
+
+check_present \
+    "InMemHandler (SFTP serving) present in test-sftp-server" \
+    "InMemHandler" \
+    "audio-uploader-go/cmd/test-sftp-server/"
+
+check_present \
+    "SFTP_HOST_KEY written by test-sftp-server" \
+    "SFTP_HOST_KEY" \
+    "audio-uploader-go/cmd/test-sftp-server/"
+
+check_present \
+    "AddHostKey present in test-sftp-server" \
+    "AddHostKey" \
+    "audio-uploader-go/cmd/test-sftp-server/"
+
+check_absent \
+    "InsecureIgnoreHostKey absent from test-sftp-server" \
+    "InsecureIgnoreHostKey" \
+    "audio-uploader-go/cmd/test-sftp-server/"
+
+check_present \
+    "test-sftp-server binary referenced in Containerfile.test-sftp-server" \
+    "test-sftp-server" \
+    "Containerfile.test-sftp-server"
+
+check_present \
+    "container:work-netns present in scripts/start_test_sftp.sh" \
+    "container:work-netns" \
+    "scripts/start_test_sftp.sh"
+
+check_present \
+    "audios-test-sftp container name present in scripts/start_test_sftp.sh" \
+    "audios-test-sftp" \
+    "scripts/start_test_sftp.sh"
+
+check_present \
+    "audios-test-sftp container name present in scripts/stop_test_sftp.sh" \
+    "audios-test-sftp" \
+    "scripts/stop_test_sftp.sh"
+
+check_absent \
+    "env file contents not printed in scripts/start_test_sftp.sh" \
+    "cat.*sftp" \
+    "scripts/start_test_sftp.sh"
+
+check_present \
+    "--sftp-mode still present in scripts/run_pipeline.sh" \
+    "--sftp-mode" \
+    "scripts/run_pipeline.sh"
+echo ""
+
+# ==========================================================================
 echo "--- Summary ---"
 if [[ "$failures" -eq 0 ]]; then
     echo "All checks PASSED (0 failures)."
