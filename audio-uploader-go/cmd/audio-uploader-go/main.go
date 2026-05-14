@@ -18,12 +18,17 @@ import (
 
 )
 
+// defaultSFTPSecretPath is the production secret file path used when
+// --sftp-secret-path is not specified.
+const defaultSFTPSecretPath = "/run/secrets/sftp-env"
+
 type Args struct {
-  Client     string
-  Date       string
-  SharedRoot string
-  RunID      string
-  DryRun     bool
+  Client         string
+  Date           string
+  SharedRoot      string
+  RunID          string
+  DryRun         bool
+  SFTPSecretPath string
 }
 
 func envOr(k, def string) string {
@@ -525,6 +530,7 @@ func main() {
   flag.StringVar(&a.SharedRoot, "shared-root", "/shared", "shared root")
   flag.StringVar(&a.RunID, "run-id", "", "run id")
   flag.BoolVar(&a.DryRun, "dry-run", false, "dry run (no sftp, pero genera manifest y prepared json)")
+  flag.StringVar(&a.SFTPSecretPath, "sftp-secret-path", defaultSFTPSecretPath, "path to SFTP secret env file")
   flag.Parse()
 
   if a.Client == "" || a.Date == "" {
@@ -564,7 +570,7 @@ func main() {
   var remoteJson, remoteAud string
 
   if !a.DryRun {
-    cfg, err := parseSFTPConfig("/run/secrets/sftp-env")
+    cfg, err := parseSFTPConfig(a.SFTPSecretPath)
     if err != nil {
       log.Fatalf("sftp config: %v", err)
     }

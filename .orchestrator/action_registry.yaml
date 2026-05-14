@@ -1,0 +1,114 @@
+registry_version: "1.0"
+steps:
+  - id: git-status
+    description: "Show current git working tree status (short format)"
+    command_argv: ["git", "status", "--short"]
+    working_directory: project_root
+    risk: safe_auto
+    timeout_seconds: 15
+    output_limit_chars: 5000
+    allowed_exit_codes: [0]
+    expected_artifacts: []
+    allowed_paths: ["."]
+    blocked_paths: ["secrets/", "shared/", "logs/"]
+    network_access: false
+    requires_approval: false
+    gates_may_close: []
+    gates_must_not_close: []
+    summarization_policy:
+      strategy: full_sanitized
+
+  - id: git-diff-stat
+    description: "Show stat summary of uncommitted changes (filenames and counts only, no content)"
+    command_argv: ["git", "diff", "--stat"]
+    working_directory: project_root
+    risk: safe_auto
+    timeout_seconds: 15
+    output_limit_chars: 5000
+    allowed_exit_codes: [0]
+    expected_artifacts: []
+    allowed_paths: ["."]
+    blocked_paths: ["secrets/", "shared/", "logs/"]
+    network_access: false
+    requires_approval: false
+    gates_may_close: []
+    gates_must_not_close: []
+    summarization_policy:
+      strategy: full_sanitized
+
+  - id: check-invariants
+    description: "Run static invariant checker — grep-based, read-only, no network, no file writes"
+    command_argv: ["bash", "scripts/check_invariants.sh"]
+    working_directory: project_root
+    risk: safe_auto
+    timeout_seconds: 60
+    output_limit_chars: 20000
+    allowed_exit_codes: [0]
+    expected_artifacts: []
+    allowed_paths: ["."]
+    blocked_paths: ["secrets/", "shared/", "logs/"]
+    network_access: false
+    requires_approval: false
+    gates_may_close: ["G-INVARIANTS-PASS"]
+    gates_must_not_close: []
+    summarization_policy:
+      strategy: error_lines_only
+      max_lines: 50
+      include_errors: true
+
+  - id: rust-tests
+    description: "Build Containerfile.test-rust and run all Rust workspace tests (audios_common, audio-fetcher-rs, audio-converter-rs, metadata-matcher-rs, pipeline-runner)"
+    command_argv: ["podman", "build", "-f", "Containerfile.test-rust", "."]
+    working_directory: project_root
+    risk: safe_auto
+    timeout_seconds: 300
+    output_limit_chars: 50000
+    allowed_exit_codes: [0]
+    expected_artifacts: []
+    allowed_paths: ["."]
+    blocked_paths: ["secrets/", "shared/", "logs/"]
+    network_access: false
+    requires_approval: false
+    gates_may_close: ["G-RUST-TESTS-PASS"]
+    gates_must_not_close: []
+    summarization_policy:
+      strategy: last_N_lines
+      max_lines: 100
+
+  - id: go-tests
+    description: "Build Containerfile.test-go and run Go unit tests for audio-uploader-go"
+    command_argv: ["podman", "build", "-f", "Containerfile.test-go", "."]
+    working_directory: project_root
+    risk: safe_auto
+    timeout_seconds: 300
+    output_limit_chars: 50000
+    allowed_exit_codes: [0]
+    expected_artifacts: []
+    allowed_paths: ["."]
+    blocked_paths: ["secrets/", "shared/", "logs/"]
+    network_access: false
+    requires_approval: false
+    gates_may_close: ["G-GO-TESTS-PASS"]
+    gates_must_not_close: []
+    summarization_policy:
+      strategy: last_N_lines
+      max_lines: 100
+
+  - id: sftp-tests
+    description: "Build Containerfile.test-sftp and run Go SFTP integration tests (host key pinning, wrong-key rejection, MkdirAll)"
+    command_argv: ["podman", "build", "-f", "Containerfile.test-sftp", "."]
+    working_directory: project_root
+    risk: safe_auto
+    timeout_seconds: 300
+    output_limit_chars: 50000
+    allowed_exit_codes: [0]
+    expected_artifacts: []
+    allowed_paths: ["."]
+    blocked_paths: ["secrets/", "shared/", "logs/"]
+    network_access: false
+    requires_approval: false
+    gates_may_close: ["G-SFTP-TESTS-PASS"]
+    gates_must_not_close: []
+    summarization_policy:
+      strategy: last_N_lines
+      max_lines: 100

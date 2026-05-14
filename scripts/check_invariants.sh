@@ -53,10 +53,16 @@ echo ""
 
 # ==========================================================================
 echo "--- [1] SFTP unsafe host key callback ---"
-check_absent \
-    "ssh.InsecureIgnoreHostKey absent from audio-uploader-go" \
-    "ssh\.InsecureIgnoreHostKey" \
-    "audio-uploader-go/"
+# Exclude pure comment lines (// ...) — explanatory comments that name the
+# forbidden API are documentation of absence, not actual usage.
+_inv1_hits="$(grep -rn -- "ssh\.InsecureIgnoreHostKey" "audio-uploader-go/" 2>/dev/null \
+    | grep -Ev ':[0-9]+:[[:space:]]*//')"
+if [[ -n "$_inv1_hits" ]]; then
+    fail "ssh.InsecureIgnoreHostKey absent from audio-uploader-go"
+    printf '%s\n' "$_inv1_hits" | head -5 | sed 's/^/    /'
+else
+    pass "ssh.InsecureIgnoreHostKey absent from audio-uploader-go"
+fi
 echo ""
 
 # ==========================================================================
@@ -231,6 +237,47 @@ check_absent \
     "\"Phase 2H-B\" absent from docs" \
     "Phase 2H-B" \
     "README.md" "SECURITY.md" "CLAUDE.md"
+echo ""
+
+# ==========================================================================
+echo "--- [9] OPS invariant contract anchors ---"
+# Verify that CLAUDE.md contains the OPS INVARIANT CONTRACT section and its
+# required phrases. These checks protect against accidental deletion of the
+# invariant contract or its key findings.
+check_present \
+    "OPS INVARIANT CONTRACT section present in CLAUDE.md" \
+    "OPS INVARIANT CONTRACT" \
+    "CLAUDE.md"
+
+check_present \
+    "manual_approval limitation documented in CLAUDE.md" \
+    "manual_approval" \
+    "CLAUDE.md"
+
+check_present \
+    "needs_approval finding documented in CLAUDE.md" \
+    "needs_approval" \
+    "CLAUDE.md"
+
+check_present \
+    "no-approve flag limitation documented in CLAUDE.md" \
+    "no --approve" \
+    "CLAUDE.md"
+
+check_present \
+    "shared/runs PII boundary documented in CLAUDE.md" \
+    "shared/runs" \
+    "CLAUDE.md"
+
+check_present \
+    "G-INVARIANTS-PASS gate documented in CLAUDE.md" \
+    "G-INVARIANTS-PASS" \
+    "CLAUDE.md"
+
+check_present \
+    "future prompt rule documented in CLAUDE.md" \
+    "OPS invariant contract applies" \
+    "CLAUDE.md"
 echo ""
 
 # ==========================================================================

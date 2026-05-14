@@ -290,3 +290,220 @@ Every task must end with:
 7. Recommended next step
 8. Confirmation of no advancement without authorization
 ```
+
+---
+
+## OPS INVARIANT CONTRACT
+
+This section is the canonical reference for operational and safety invariants
+established through OPS phases (OPS-10 through OPS-O4 and forward).
+
+Future OPS prompts may be compact when they explicitly say:
+"Read CLAUDE.md. The OPS invariant contract applies."
+
+If a prompt contradicts the OPS invariant contract, stop and report the
+contradiction before proceeding.
+
+---
+
+### Repository roles
+
+- **Architecture/design authority:** ChatGPT (external).
+- **Implementer:** Claude Code.
+- **Validation/audit control plane:** `local-ai-dev-orchestrator`
+  (at `/home/Elmo_Quito/proyectos-propios/local-ai-dev-orchestrator`).
+- **Target project:** `audios-natura-v2` (this repository).
+
+Claude Code must not bypass the orchestrator for registered validation once a
+phase explicitly uses orchestrator workflow.
+
+---
+
+### Default execution model
+
+- No autonomous execution, no watchers, no daemon, no scheduler.
+- No live pipeline execution unless a phase explicitly authorizes it.
+- No direct Podman execution unless a phase explicitly authorizes it.
+- Podman validation should preferably run through registered orchestrator steps
+  when the orchestrator workflow is in scope for the current phase.
+
+---
+
+### Permanent forbidden commands
+
+The following commands are always forbidden:
+
+```
+sudo
+podman run
+podman-compose run
+podman-compose build
+cargo update
+cargo install
+cargo add
+go get
+go mod tidy
+git commit
+git push
+```
+
+Clarifications:
+
+- `podman build` is forbidden by default, but may be authorized explicitly by a
+  phase either directly or through a registered orchestrator step.
+- Direct `podman build` must not be used when the phase specifies the orchestrator path.
+
+---
+
+### Secrets and PII boundaries
+
+Never read, print, copy, summarize, parse, or transform:
+
+- `secrets/mssql.env`
+- `secrets/sftp.env`
+- `shared/runs/` (runtime PII: debtor names, phones, debt data, audio recordings)
+- `logs/`
+- real `.gsm` files
+- real `.wav` files
+- runtime JSON artifacts that may contain PII
+
+Allowed:
+
+- `secrets/*.env.example`
+- synthetic test fixtures
+- source code and documentation
+- safe config files (`.orchestrator/*.yaml`, example files)
+
+---
+
+### Orchestrator state
+
+Expected state after OPS-O2/OPS-O3:
+
+- `.orchestrator/` directory exists with config files:
+  `project.yaml`, `action_registry.yaml`, `policy.yaml`,
+  `scopes.yaml`, `gates.yaml`, `context_pack.yaml`
+- `inbox/`, `outbox/`, `archive/` directories exist.
+- `ledger.db` may exist (created by `bridge-run --record` in OPS-O3).
+- All four gates are closed after OPS-O3/OPS-O4A:
+  `G-INVARIANTS-PASS`, `G-RUST-TESTS-PASS`, `G-GO-TESTS-PASS`, `G-SFTP-TESTS-PASS`.
+
+---
+
+### Orchestrator command policy
+
+Read-only — generally safe within any phase:
+
+- `self-check`, `self-check --project`
+- `validate-config`, `show-registry`
+- `gates-validate`, `gates-status`
+- `ledger-status`, `ledger-show`
+- `bridge-list`, `bridge-validate`, `bridge-read`
+- `context-pack-preview`
+
+Write/record — require explicit phase authorization:
+
+- `bridge-run --record`
+- `run-step --record`
+- `gates-evaluate --record`
+- `bridge-archive`
+- `context-pack-build`
+- `governance-*` create/archive commands
+
+---
+
+### Manual approval limitation (OPS-O4 finding)
+
+In `local-ai-dev-orchestrator`:
+
+- Policy decision `needs_approval` (exit code 2) never executes the step.
+- There is no --approve flag for `run-step` or `bridge-run`.
+- A step with `risk: manual_approval`, `requires_approval: true`, or listed under
+  `require_approval` in `policy.yaml` is terminally blocked at execution time.
+- If a step must execute through the orchestrator, policy must evaluate it to `allow`.
+- This does not mean autonomous execution. File Bridge always requires explicit
+  human invocation of `bridge-run`. Using `risk: safe_auto` with the File Bridge
+  is the correct model: the human invoking `bridge-run` is the authorization act.
+
+---
+
+### Registered validation steps
+
+Current steps in `action_registry.yaml`:
+
+| Step | Risk | Command |
+|---|---|---|
+| `check-invariants` | `safe_auto` | `bash scripts/check_invariants.sh` |
+| `git-status` | `safe_auto` | `git status --short` |
+| `git-diff-stat` | `safe_auto` | `git diff --stat` |
+| `rust-tests` | `safe_auto` | `podman build -f Containerfile.test-rust .` |
+| `go-tests` | `safe_auto` | `podman build -f Containerfile.test-go .` |
+| `sftp-tests` | `safe_auto` | `podman build -f Containerfile.test-sftp .` |
+
+All steps are `safe_auto` and can execute through the File Bridge when authorized.
+OPS-O4A remediation completed: `risk` changed to `safe_auto`, `requires_approval: false`,
+removed from `require_approval` list in `policy.yaml`.
+
+---
+
+### Gates
+
+| Gate | Status after OPS-O4A | Required step |
+|---|---|---|
+| `G-INVARIANTS-PASS` | **closed** | `check-invariants` |
+| `G-RUST-TESTS-PASS` | **closed** | `rust-tests` |
+| `G-GO-TESTS-PASS` | **closed** | `go-tests` |
+| `G-SFTP-TESTS-PASS` | **closed** | `sftp-tests` |
+
+Gate semantics:
+
+- Gates close only from recorded step run evidence via `gates-evaluate --record`.
+- `gates-evaluate` without `--record` is read-only and does not close gates.
+- `gates-evaluate --record` requires explicit phase authorization.
+- There is no `gates-close` command; gate state is always evidence-driven.
+
+---
+
+### Context pack safety
+
+Context packs must always exclude:
+
+- `secrets/`, `shared/`, `logs/`, `target/`, `.git/`
+- `*.gsm`, `*.wav`, `*.zip`
+- `.orchestrator/ledger.db`
+- `.orchestrator/inbox/`, `.orchestrator/outbox/`
+- `.orchestrator/archive/`, `.orchestrator/governance-archive/`
+
+These exclusions are configured in `.orchestrator/context_pack.yaml`.
+
+---
+
+### Closure report format (extended)
+
+Every task must end with:
+
+```
+1. Decision executed
+2. Files created/modified
+3. Commands executed
+4. Test results
+5. Risks or deviations
+6. What was deliberately NOT implemented
+7. Recommended next step
+8. Confirmation of no advancement without authorization
+```
+
+Future closure reports that affect the invariant contract must also include:
+
+- **Invariant status:** whether any invariant was added or changed in this task.
+- **Prompt shortening:** whether future prompts may be shortened because of this update.
+
+---
+
+### Future prompt rule
+
+Future OPS prompts may be compact when they explicitly say:
+"Read CLAUDE.md. The OPS invariant contract applies."
+
+If a prompt contradicts the OPS invariant contract, stop and report the
+contradiction before proceeding.

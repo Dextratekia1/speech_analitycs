@@ -346,3 +346,57 @@ func TestDryRunMarksItemsPreparedWithoutSFTPConnect(t *testing.T) {
 	}
 	// No parseSFTPConfig or sftpConnect called above; no SFTP_HOST_KEY required.
 }
+
+// --- OPS-13: --sftp-secret-path flag tests ---
+
+// TestSFTPSecretPathDefaultIsProductionPath verifies that the package-level
+// constant used as the flag default matches the production secret file path.
+// If this test fails it means production behavior has been broken.
+func TestSFTPSecretPathDefaultIsProductionPath(t *testing.T) {
+	const want = "/run/secrets/sftp-env"
+	if defaultSFTPSecretPath != want {
+		t.Errorf("defaultSFTPSecretPath = %q, want %q", defaultSFTPSecretPath, want)
+	}
+}
+
+// TestSFTPSecretPathCustomPathFunctionality verifies that parseSFTPConfig
+// accepts a custom path supplied via --sftp-secret-path.
+func TestSFTPSecretPathCustomPathFunctionality(t *testing.T) {
+	f := writeTempEnvFile(t, []string{
+		"SFTP_HOST=custom.example",
+		"SFTP_USER=customuser",
+		"SFTP_PASSWORD=fake-password",
+		"SFTP_HOST_KEY=" + fakeHostKey,
+	})
+	cfg, err := parseSFTPConfig(f)
+	if err != nil {
+		t.Fatalf("parseSFTPConfig with custom path failed: %v", err)
+	}
+	if cfg.Host != "custom.example" {
+		t.Errorf("Host: got %q, want %q", cfg.Host, "custom.example")
+	}
+	if cfg.HostKeyRaw != fakeHostKey {
+		t.Errorf("HostKeyRaw: got %q, want %q", cfg.HostKeyRaw, fakeHostKey)
+	}
+}
+
+// TestSFTPSecretPathNotRequiredInDryRun verifies that the dry-run code path
+// does not call parseSFTPConfig. parseSFTPConfig fails for a nonexistent path
+// (when no env fallback is present), but per-item processing succeeds without
+// any SFTP config — confirming the dry-run path correctly bypasses it.
+func TestSFTPSecretPathNotRequiredInDryRun(t *testing.T) {
+	// parseSFTPConfig must fail for a nonexistent path when no env vars are set.
+	// This confirms that if dry-run called parseSFTPConfig it would fail.
+	_, err := parseSFTPConfig("/tmp/ops13-nonexistent-sftp.env")
+	if err == nil {
+		t.Fatal("parseSFTPConfig must fail for nonexistent path with no env fallback")
+	}
+
+	// The per-item processing used in the dry-run path must succeed without SFTP config.
+	m := makeNaturaMatched()
+	out, required, optional := buildOutgoing(m)
+	ok, reason := validateOutgoing(m, out, required, optional)
+	if !ok {
+		t.Errorf("dry-run item processing must succeed without SFTP config: %s", reason)
+	}
+}

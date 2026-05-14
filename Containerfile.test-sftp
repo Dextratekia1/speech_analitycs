@@ -1,0 +1,14 @@
+FROM docker.io/library/golang:1.22-bookworm
+WORKDIR /app
+COPY audio-uploader-go/ ./audio-uploader-go/
+WORKDIR /app/audio-uploader-go
+
+# go.sum is committed; -mod=readonly ensures the build does not update module files.
+ENV GOFLAGS=-mod=readonly
+
+# Compile and run all tests (normal + integration) with the integration build tag.
+# Integration tests use a localhost-only in-process SFTP server and require no
+# external network, no production secrets, and no shared/runs access.
+RUN go test -tags integration ./... -v
+
+CMD ["go", "test", "-tags", "integration", "./...", "-v"]

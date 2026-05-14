@@ -1,0 +1,54 @@
+project_id: audios-natura-v2
+description: "Multi-client audio pipeline — GSM download, WAV conversion, MSSQL match, SFTP upload (clients: natura id=52, maf id=59)"
+version: "1.0"
+
+paths:
+  project_root: "."
+  allowed_write_paths:
+    - "audio-fetcher-rs/"
+    - "audio-converter-rs/"
+    - "metadata-matcher-rs/"
+    - "audio-uploader-go/"
+    - "pipeline-runner/"
+    - "crates/"
+    - "scripts/"
+    - "Containerfile.test-rust"
+    - "Containerfile.test-go"
+    - "Containerfile.test-sftp"
+    - "CLAUDE.md"
+    - "README.md"
+    - "SECURITY.md"
+    - "podman-compose.yml"
+    - "podman-compose.override.yml"
+  blocked_read_paths:
+    - "secrets/"
+    - "shared/"
+    - "logs/"
+    - "*.gsm"
+    - "*.wav"
+
+goals:
+  - id: PHASE_VALIDATION
+    description: "All test suites pass and static invariants are clean before phase closure"
+    steps_required:
+      - check-invariants
+      - rust-tests
+      - go-tests
+      - sftp-tests
+    gates:
+      - G-INVARIANTS-PASS
+      - G-RUST-TESTS-PASS
+      - G-GO-TESTS-PASS
+      - G-SFTP-TESTS-PASS
+
+environment:
+  inherit_from_shell: false
+  allowed_vars:
+    - PATH
+    - HOME
+  forbidden_vars:
+    - MSSQL_PASSWORD
+    - SFTP_PASSWORD
+    - SFTP_HOST_KEY
+    - DATABASE_URL
+    - AWS_SECRET_ACCESS_KEY

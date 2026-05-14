@@ -28,3 +28,12 @@ audio-uploader-go/bin/
 
 # ── Editor / tooling directories ─────────────────────────────────────────────
 NvChad/
+
+# ── Orchestrator runtime artifacts ────────────────────────────────────────────
+# ledger.db is a SQLite database created by `orchestrator run-step --record`.
+# outbox/, archive/, governance-archive/ are created at runtime by bridge/governance commands.
+# The config files (.orchestrator/*.yaml) and inbox/ ARE tracked in version control.
+.orchestrator/ledger.db
+.orchestrator/outbox/
+.orchestrator/archive/
+.orchestrator/governance-archive/

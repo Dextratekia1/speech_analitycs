@@ -1,0 +1,65 @@
+gates_version: "2.0"
+gates:
+  - id: G-INVARIANTS-PASS
+    description: "Static invariant checker exits 0 — no unsafe SFTP callbacks, no stale network references, no schema_version 3"
+    required_steps:
+      - check-invariants
+    required_statuses:
+      - success
+    required_exit_codes:
+      - 0
+    allow_auto_close: true
+    requires_human_review: false
+    blocked_by_statuses:
+      - failed
+      - timeout
+      - secret_violation
+      - error
+
+  - id: G-RUST-TESTS-PASS
+    description: "Containerfile.test-rust builds and all Rust workspace tests pass (audios_common, audio-fetcher-rs, audio-converter-rs, metadata-matcher-rs, pipeline-runner)"
+    required_steps:
+      - rust-tests
+    required_statuses:
+      - success
+    required_exit_codes:
+      - 0
+    allow_auto_close: true
+    requires_human_review: false
+    blocked_by_statuses:
+      - failed
+      - timeout
+      - secret_violation
+      - error
+
+  - id: G-GO-TESTS-PASS
+    description: "Containerfile.test-go builds and all Go unit tests pass for audio-uploader-go"
+    required_steps:
+      - go-tests
+    required_statuses:
+      - success
+    required_exit_codes:
+      - 0
+    allow_auto_close: true
+    requires_human_review: false
+    blocked_by_statuses:
+      - failed
+      - timeout
+      - secret_violation
+      - error
+
+  - id: G-SFTP-TESTS-PASS
+    description: "Containerfile.test-sftp builds and Go SFTP integration tests pass (host key pinning, wrong-key rejection, MkdirAll)"
+    required_steps:
+      - sftp-tests
+    required_statuses:
+      - success
+    required_exit_codes:
+      - 0
+    allow_auto_close: true
+    requires_human_review: false
+    blocked_by_statuses:
+      - failed
+      - timeout
+      - secret_violation
+      - error

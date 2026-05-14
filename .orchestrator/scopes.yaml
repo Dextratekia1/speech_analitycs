@@ -1,0 +1,31 @@
+scopes_version: "1.0"
+allow_network: false
+allow_secrets_access: false
+
+allowed_write_roots:
+  - "audio-fetcher-rs/"
+  - "audio-converter-rs/"
+  - "metadata-matcher-rs/"
+  - "audio-uploader-go/"
+  - "pipeline-runner/"
+  - "crates/"
+  - "scripts/"
+  - "."
+
+blocked_write_roots:
+  - "secrets/"
+  - "shared/"
+  - "logs/"
+  - "*.env"
+  - "*.gsm"
+  - "*.wav"
+  - ".git/"
+
+allowed_read_roots:
+  - "."
+
+blocked_read_roots:
+  - "secrets/"
+  - "shared/"
+  - "logs/"
+  - "*.env"

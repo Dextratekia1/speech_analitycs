@@ -645,6 +645,27 @@ fn main() -> Result<()> {
 
     write_pipeline_json(&report, &manifest_dir)?;
 
+    // Concise final summary on stderr — does not affect run_dir= stdout behavior.
+    {
+        let summary = &report.summary;
+        let n = |key: &str| -> u64 { summary.get(key).and_then(|v| v.as_u64()).unwrap_or(0) };
+        eprintln!(
+            "pipeline status={} client={} date={} duration={}ms dry_run={}",
+            report.status, report.client, report.date, pipeline_duration_ms, report.dry_run
+        );
+        for st in &report.stages {
+            eprintln!("  stage={} status={} duration={}ms",
+                st.name, st.status, st.duration_ms.unwrap_or(0));
+        }
+        if summary.as_object().map(|m| !m.is_empty()).unwrap_or(false) {
+            eprintln!(
+                "  counts fetch={} convert={} match={} upload_total={} sent={} send_error={}",
+                n("fetch_total"), n("convert_total"), n("match_total"),
+                n("upload_total"), n("upload_sent_ok"), n("upload_send_error")
+            );
+        }
+    }
+
     if !failed {
         println!("run_dir={}", run_dir.display());
         Ok(())

@@ -14,6 +14,7 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
+    time::Instant,
 };
 use tiberius::{Client, Config};
 use tokio::net::TcpStream;
@@ -389,13 +390,50 @@ async fn main() -> Result<()> {
         k += 1;
     }
 
+    let parse_failures = inputs.iter().filter(|i| !i.parse_ok).count();
+    tracing::info!(
+        client = %args.client, date = %args.date,
+        candidates = inputs.len(), parse_failures,
+        "match: wav candidates loaded"
+    );
+    if parse_failures > 0 {
+        tracing::warn!(
+            client = %args.client, date = %args.date,
+            count = parse_failures,
+            "match: filename parse failures (affected records use fallback record_id)"
+        );
+    }
+    if rpta_opecodout.is_none() && !inputs.is_empty() {
+        tracing::warn!(
+            client = %args.client, date = %args.date,
+            "match: rpta_opecodout mapping not configured; descrip_rpta will default to OTRO"
+        );
+    }
+
     if inputs.is_empty() {
         tracing::warn!("no hay wavs en {}", wav_dir.display());
         return Ok(());
     }
 
     if args.dry_run {
-        tracing::info!("--dry-run: no se consulta MSSQL ni se escriben jsons");
+        tracing::info!(
+            client = %args.client, date = %args.date,
+            candidates = inputs.len(),
+            "--dry-run: no se consulta MSSQL ni se escriben jsons"
+        );
+        let manifest = MatchManifest {
+            schema_version: 1,
+            client: args.client.clone(),
+            date: args.date.clone(),
+            run_id: run_id.clone(),
+            generated_at: Utc::now(),
+            items: vec![],
+        };
+        fs::write(
+            manifests_dir.join("match.json"),
+            serde_json::to_string_pretty(&manifest)?,
+        )?;
+        println!("run_dir={}", run_dir.display());
         return Ok(());
     }
 
@@ -406,7 +444,14 @@ async fn main() -> Result<()> {
     let mut car_sql = cfg.r#match.carteras_sql.clone();
     car_sql = car_sql.replace("{{CLIENT_ID}}", &cfg.client.id.to_string());
     car_sql = car_sql.replace("{{DATE}}", &args.date);
+    let t_carteras = Instant::now();
     let carteras = query_ints_first_col(&mut client, &car_sql).await?;
+    let carteras_ms = t_carteras.elapsed().as_millis();
+    tracing::info!(
+        client = %args.client, date = %args.date,
+        carteras = carteras.len(), elapsed_ms = carteras_ms,
+        "match: carteras query done"
+    );
 
     let mut rows_map: HashMap<i32, serde_json::Map<String, serde_json::Value>> = HashMap::new();
 
@@ -414,6 +459,7 @@ async fn main() -> Result<()> {
         let tail_sql = load_tail_sql(Path::new(&cfg.r#match.batch_lookup.tail_sql_file))?;
         let sql = build_batch_sql(&args.date, cfg.client.id, cfg.r#match.window_sec_tipo1, &carteras, &tail_sql, &sql_inputs);
 
+        let t_lookup = Instant::now();
         let mut stream = client.simple_query(sql).await?;
         while let Some(item) = stream.try_next().await? {
             let row = match item {
@@ -451,10 +497,18 @@ async fn main() -> Result<()> {
 
             rows_map.insert(k_i, obj);
         }
+        let lookup_ms = t_lookup.elapsed().as_millis();
+        tracing::info!(
+            client = %args.client, date = %args.date,
+            rows = rows_map.len(), elapsed_ms = lookup_ms,
+            "match: batch lookup done"
+        );
     }
 
     // escribir jsons
     let mut items: Vec<MatchItem> = vec![];
+    let mut count_lookup_ok: usize = 0;
+    let mut count_lookup_failed: usize = 0;
     for inp in inputs.iter() {
         let record_id = &inp.record_id;
         let json_rel = format!("matched/{record_id}.json");
@@ -541,6 +595,7 @@ async fn main() -> Result<()> {
         fs::create_dir_all(out_path.parent().unwrap())?;
         fs::write(&out_path, serde_json::to_string_pretty(&core)?)?;
 
+        if lookup_ok { count_lookup_ok += 1; } else { count_lookup_failed += 1; }
         items.push(MatchItem {
             record_id: record_id.clone(),
             wav_path: wav_rel.clone(),
@@ -548,6 +603,13 @@ async fn main() -> Result<()> {
             lookup_ok,
         });
     }
+
+    tracing::info!(
+        client = %args.client, date = %args.date,
+        total = items.len(), lookup_ok = count_lookup_ok,
+        lookup_failed = count_lookup_failed,
+        "match: complete"
+    );
 
     let manifest = MatchManifest {
         schema_version: 1,

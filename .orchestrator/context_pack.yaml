@@ -1,0 +1,29 @@
+context_pack_version: "1"
+
+include_paths:
+  - "."
+
+exclude_paths:
+  - "secrets/"
+  - "shared/"
+  - "logs/"
+  - "target/"
+  - ".git/"
+  - "NvChad/"
+  - ".orchestrator/ledger.db"
+  - ".orchestrator/inbox/"
+  - ".orchestrator/outbox/"
+  - ".orchestrator/archive/"
+  - ".orchestrator/governance-archive/"
+  - "*.gsm"
+  - "*.wav"
+  - "*.zip"
+
+include_orchestrator_config: true
+include_ledger_summary: true
+include_gate_summary: true
+include_bridge_summary: true
+max_file_bytes: 102400
+max_total_bytes: 5242880
+redaction_enabled: true
+output_format: "directory"

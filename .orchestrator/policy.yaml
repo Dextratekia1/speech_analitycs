@@ -1,0 +1,41 @@
+policy_version: "1.0"
+
+default_decision: "block"
+allow_unregistered_steps: false
+max_timeout_seconds: 360
+
+risk_rules:
+  safe_auto: "allow"
+  manual_approval: "needs_approval"
+  blocked: "block"
+  experimental: "needs_approval"
+
+auto_execute:
+  - git-status
+  - git-diff-stat
+  - check-invariants
+
+require_approval: []
+
+block_always:
+  inline_command_fields:
+    - command
+    - shell_command
+    - bash
+    - script_inline
+    - exec
+    - cmd
+    - run
+  execution_outside_project: true
+  write_to_blocked_paths: true
+  read_env_secrets: true
+
+limits:
+  max_consecutive_same_error: 3
+  max_requests_per_session: 30
+  max_output_chars_per_step: 100000
+
+secret_handling:
+  on_detection_in_shared_output: policy_violation
+  on_detection_in_raw_log: warning
+  redact_before_sharing: true
