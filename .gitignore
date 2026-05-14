@@ -42,3 +42,8 @@ NvChad/
 # .orchestrator-memory/ is created by `orchestrator memory-init` and contains
 # a SQLite database (memory.db) with ingested evidence. Runtime artifact only.
 .orchestrator-memory/
+
+# ── Release image archives ────────────────────────────────────────────────────
+# dist/ is written by scripts/build_release.sh. Archives contain the container
+# image only — no credentials. Not committed; retain locally for rollback.
+dist/

@@ -69,7 +69,17 @@ Fedora CoreOS deployment guide for the audios-natura-v2 daily pipeline.
 - `:dev` must never appear in production unit files or production scripts.
 - `:git-<sha7>` is created at build time; `:release` is re-tagged after validation.
 
-**Building on dev machine:**
+**Build and export (dev machine):**
+
+Use `scripts/build_release.sh` (verifies clean tree, builds, tags, saves archive to `dist/`):
+```bash
+bash scripts/build_release.sh
+# Archive: dist/pipeline-runner-git-<sha7>.tar.gz
+```
+
+See `deploy/release_checklist.md` for the full pre-release, transfer, and validation workflow.
+
+Manual build equivalent:
 ```bash
 SHA7="$(git rev-parse --short=7 HEAD)"
 podman build -t "localhost/audios-natura/pipeline-runner:git-${SHA7}" \
@@ -80,11 +90,10 @@ podman tag "localhost/audios-natura/pipeline-runner:git-${SHA7}" \
 
 **Transferring to production host (no registry):**
 ```bash
-podman save localhost/audios-natura/pipeline-runner:release \
-  | gzip > pipeline-runner-release.tar.gz
-scp pipeline-runner-release.tar.gz production-host:/tmp/
+# Archive is in dist/ when using build_release.sh:
+scp dist/pipeline-runner-git-<sha7>.tar.gz production-host:/tmp/
 # On production host:
-podman load < /tmp/pipeline-runner-release.tar.gz
+podman load < /tmp/pipeline-runner-git-<sha7>.tar.gz
 podman images localhost/audios-natura/pipeline-runner
 ```
 

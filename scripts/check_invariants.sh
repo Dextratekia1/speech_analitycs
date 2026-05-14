@@ -543,6 +543,81 @@ check_present \
 echo ""
 
 # ==========================================================================
+echo "--- [17] OPS-D3 release image build workflow anchors ---"
+# Verify that scripts/build_release.sh and deploy/release_checklist.md exist
+# and preserve key safety properties: clean-tree guard, correct immutable + release
+# tags, no registry push, no secrets access, dist/ gitignored, doc cross-references.
+
+if [[ -f "scripts/build_release.sh" ]]; then
+    pass "scripts/build_release.sh exists"
+else
+    fail "scripts/build_release.sh missing"
+fi
+
+if [[ -f "deploy/release_checklist.md" ]]; then
+    pass "deploy/release_checklist.md exists"
+else
+    fail "deploy/release_checklist.md missing"
+fi
+
+check_present \
+    "build_release.sh has --allow-dirty option" \
+    "allow-dirty" \
+    "scripts/build_release.sh"
+
+check_present \
+    "build_release.sh has --no-save option" \
+    "no-save" \
+    "scripts/build_release.sh"
+
+check_present \
+    "build_release.sh checks for dirty working tree" \
+    "git diff.*quiet" \
+    "scripts/build_release.sh"
+
+check_present \
+    "build_release.sh uses :git- immutable tag" \
+    ":git-" \
+    "scripts/build_release.sh"
+
+check_present \
+    "build_release.sh tags :release" \
+    ":release" \
+    "scripts/build_release.sh"
+
+check_absent \
+    "build_release.sh does not push to a registry" \
+    "podman push" \
+    "scripts/build_release.sh"
+
+check_present \
+    "build_release.sh references pipeline-runner/Containerfile" \
+    "pipeline-runner/Containerfile" \
+    "scripts/build_release.sh"
+
+check_present \
+    "dist/ is gitignored" \
+    "^dist/" \
+    ".gitignore"
+
+check_absent \
+    "build_release.sh does not reference real secret files" \
+    "secrets/mssql\|secrets/sftp" \
+    "scripts/build_release.sh"
+
+check_present \
+    "DEPLOY.md references build_release.sh" \
+    "build_release\.sh" \
+    "DEPLOY.md"
+
+check_present \
+    "README.md references build_release.sh" \
+    "build_release\.sh" \
+    "README.md"
+
+echo ""
+
+# ==========================================================================
 echo "--- Summary ---"
 if [[ "$failures" -eq 0 ]]; then
     echo "All checks PASSED (0 failures)."
