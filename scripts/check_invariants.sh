@@ -281,6 +281,30 @@ check_present \
 echo ""
 
 # ==========================================================================
+echo "--- [10] OPS-18 run_pipeline.sh anchors ---"
+# Verify that scripts/run_pipeline.sh exists and contains required interface markers.
+check_present \
+    "--sftp-mode flag present in scripts/run_pipeline.sh" \
+    "--sftp-mode" \
+    "scripts/run_pipeline.sh"
+
+check_present \
+    "--test-sftp-env flag present in scripts/run_pipeline.sh" \
+    "--test-sftp-env" \
+    "scripts/run_pipeline.sh"
+
+check_present \
+    "real|test|dry-run modes documented in scripts/run_pipeline.sh" \
+    "dry-run" \
+    "scripts/run_pipeline.sh"
+
+check_present \
+    "--sftp-secret-path flag present in pipeline-runner/src/main.rs" \
+    "sftp.secret.path" \
+    "pipeline-runner/src/main.rs"
+echo ""
+
+# ==========================================================================
 echo "--- Summary ---"
 if [[ "$failures" -eq 0 ]]; then
     echo "All checks PASSED (0 failures)."

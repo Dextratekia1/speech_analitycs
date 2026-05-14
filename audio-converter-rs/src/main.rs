@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use audios_common::{paths, types::{ConvertItem, ConvertManifest, FetchManifest}, util};
 use clap::Parser;
 use chrono::Utc;
-use std::{fs, path::{Path, PathBuf}, process::Command};
+use std::{fs, path::{Path, PathBuf}, process::Command, sync::{Arc, Mutex, mpsc}};
+
+const DEFAULT_CONVERSION_CONCURRENCY: usize = 2;
 
 #[derive(Parser, Debug)]
 #[command(name="audio-converter-rs")]
@@ -21,6 +23,8 @@ struct Args {
     sample_rate: u32,
     #[arg(long, default_value_t=1)]
     channels: u32,
+    #[arg(long, default_value_t=DEFAULT_CONVERSION_CONCURRENCY)]
+    conversion_concurrency: usize,
 }
 
 // parse_ffprobe_output parses the stdout bytes from a successful ffprobe run
@@ -64,9 +68,149 @@ fn output_wav_path(wav_dir: &Path, filename: &str) -> PathBuf {
     wav_dir.join(format!("{record_id}.wav"))
 }
 
+fn validate_conversion_concurrency(n: usize) -> Result<usize> {
+    if n == 0 {
+        anyhow::bail!("--conversion-concurrency must be >= 1; 0 is not a valid concurrency value");
+    }
+    Ok(n)
+}
+
+struct ConversionJob {
+    index: usize,
+    record_id: String,
+    in_path: PathBuf,
+    out_path: PathBuf,
+    sample_rate: u32,
+    channels: u32,
+}
+
+struct ConversionResult {
+    index: usize,
+    item: ConvertItem,
+    ffprobe_failed: bool,
+}
+
+// convert_one processes a single conversion job and returns a ConversionResult.
+// Checks skip_exists before dry_run, then invokes ffmpeg if needed.
+// Invokes ffprobe when a valid output file is present after conversion.
+// Never panics; ffmpeg/ffprobe failures produce error status values.
+fn convert_one(
+    index: usize,
+    record_id: &str,
+    in_path: &Path,
+    out_path: &Path,
+    sample_rate: u32,
+    channels: u32,
+    dry_run: bool,
+) -> ConversionResult {
+    let status: String;
+    if out_path.exists() {
+        status = "skip_exists".into();
+    } else if dry_run {
+        status = "dry_run".into();
+    } else {
+        let result = Command::new("ffmpeg")
+            .args(["-nostdin", "-y", "-i"])
+            .arg(in_path)
+            .args(["-ac", &channels.to_string(), "-ar", &sample_rate.to_string()])
+            .arg(out_path)
+            .status();
+        status = match result {
+            Ok(st) if st.success() => "ok".into(),
+            _ => "ffmpeg_error".into(),
+        };
+    }
+
+    let ffprobe_called = out_path.exists() && status != "dry_run" && status != "ffmpeg_error";
+    let (ffprobe_ok, duration_sec, ffprobe_failed) = if ffprobe_called {
+        let r = probe_wav(out_path);
+        (r.0, r.1, !r.0)
+    } else {
+        (false, None, false)
+    };
+
+    ConversionResult {
+        index,
+        item: ConvertItem {
+            record_id: record_id.to_string(),
+            input: in_path.to_string_lossy().into_owned(),
+            output: out_path.to_string_lossy().into_owned(),
+            status,
+            ffprobe_ok,
+            duration_sec,
+        },
+        ffprobe_failed,
+    }
+}
+
+// run_conversion_jobs dispatches conversion jobs to a bounded worker pool using only
+// std primitives. Workers share a Mutex-guarded mpsc receiver and pull jobs until
+// the queue drains. Results arrive in arbitrary completion order and are sorted by
+// original index before returning, preserving deterministic manifest item ordering.
+fn run_conversion_jobs(
+    jobs: Vec<ConversionJob>,
+    dry_run: bool,
+    concurrency: usize,
+    client_log: Arc<str>,
+    date_log: Arc<str>,
+) -> Vec<ConversionResult> {
+    if jobs.is_empty() {
+        return vec![];
+    }
+    let (job_tx, job_rx) = mpsc::channel::<ConversionJob>();
+    let (res_tx, res_rx) = mpsc::channel::<ConversionResult>();
+    let job_rx = Arc::new(Mutex::new(job_rx));
+    let n_workers = concurrency.min(jobs.len());
+
+    for _ in 0..n_workers {
+        let job_rx = Arc::clone(&job_rx);
+        let res_tx = res_tx.clone();
+        let client_log = Arc::clone(&client_log);
+        let date_log = Arc::clone(&date_log);
+        std::thread::spawn(move || {
+            loop {
+                let job: ConversionJob = match job_rx.lock().unwrap().recv() {
+                    Ok(j) => j,
+                    Err(_) => break,
+                };
+                let result = convert_one(
+                    job.index,
+                    &job.record_id,
+                    &job.in_path,
+                    &job.out_path,
+                    job.sample_rate,
+                    job.channels,
+                    dry_run,
+                );
+                if result.item.status == "ffmpeg_error" {
+                    tracing::warn!(
+                        client = %client_log, date = %date_log,
+                        "convert: ffmpeg error (1 file)"
+                    );
+                }
+                let _ = res_tx.send(result);
+            }
+        });
+    }
+    // Drop the original sender; only worker-held clones remain.
+    // When the last worker exits and drops its clone, res_rx exhausts.
+    drop(res_tx);
+
+    for job in jobs {
+        let _ = job_tx.send(job);
+    }
+    // Signal workers: no more jobs once this sender is dropped and the queue drains.
+    drop(job_tx);
+
+    let mut results: Vec<ConversionResult> = res_rx.iter().collect();
+    results.sort_by_key(|r| r.index);
+    results
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
     let args = Args::parse();
+    validate_conversion_concurrency(args.conversion_concurrency)?;
 
     let shared_root = PathBuf::from(&args.shared_root);
     let run_id = args.run_id.unwrap_or_else(|| format!("{}", Utc::now().format("%Y%m%dT%H%M%SZ")));
@@ -85,74 +229,65 @@ fn main() -> Result<()> {
 
     let fetch_total = fetch.items.len();
     let mut missing_input: usize = 0;
-    let mut attempted: usize = 0;
-    let mut count_ok: usize = 0;
-    let mut count_skip_exists: usize = 0;
-    let mut count_dry_run: usize = 0;
-    let mut count_ffmpeg_error: usize = 0;
-    let mut count_ffprobe_failed: usize = 0;
+    let client_log: Arc<str> = Arc::from(args.client.as_str());
+    let date_log: Arc<str> = Arc::from(args.date.as_str());
 
     tracing::info!(
         client = %args.client, date = %args.date,
         fetch_items = fetch_total, dry_run = args.dry_run,
+        concurrency = args.conversion_concurrency,
         "convert: start"
     );
 
-    let mut items = vec![];
+    let mut job_index = 0usize;
+    let mut jobs: Vec<ConversionJob> = Vec::new();
     for it in fetch.items.iter() {
         let in_path = raw_dir.join(&it.filename);
         if !in_path.exists() {
             missing_input += 1;
             continue;
         }
-        attempted += 1;
-
         let record_id = util::record_id_from_filename(&it.filename);
         let out_path = output_wav_path(&wav_dir, &it.filename);
-
-        let status: String;
-        if out_path.exists() {
-            status = "skip_exists".into();
-            count_skip_exists += 1;
-        } else if args.dry_run {
-            status = "dry_run".into();
-            count_dry_run += 1;
-        } else {
-            let st = Command::new("ffmpeg")
-                .args(["-nostdin", "-y", "-i"])
-                .arg(&in_path)
-                .args(["-ac", &args.channels.to_string(), "-ar", &args.sample_rate.to_string()])
-                .arg(&out_path)
-                .status()
-                .with_context(|| "ejecutando ffmpeg")?;
-            if st.success() {
-                status = "ok".into();
-                count_ok += 1;
-            } else {
-                status = "ffmpeg_error".into();
-                count_ffmpeg_error += 1;
-            }
-        }
-
-        let ffprobe_called = out_path.exists() && status != "dry_run" && status != "ffmpeg_error";
-        let (ffprobe_ok, duration_sec) = if ffprobe_called {
-            let result = probe_wav(&out_path);
-            if !result.0 {
-                count_ffprobe_failed += 1;
-            }
-            result
-        } else {
-            (false, None)
-        };
-
-        items.push(ConvertItem{
+        jobs.push(ConversionJob {
+            index: job_index,
             record_id,
-            input: in_path.to_string_lossy().to_string(),
-            output: out_path.to_string_lossy().to_string(),
-            status,
-            ffprobe_ok,
-            duration_sec,
+            in_path,
+            out_path,
+            sample_rate: args.sample_rate,
+            channels: args.channels,
         });
+        job_index += 1;
+    }
+
+    let results = run_conversion_jobs(
+        jobs,
+        args.dry_run,
+        args.conversion_concurrency,
+        Arc::clone(&client_log),
+        Arc::clone(&date_log),
+    );
+
+    let attempted = results.len();
+    let mut count_ok: usize = 0;
+    let mut count_skip_exists: usize = 0;
+    let mut count_dry_run: usize = 0;
+    let mut count_ffmpeg_error: usize = 0;
+    let mut count_ffprobe_failed: usize = 0;
+    let mut items: Vec<ConvertItem> = Vec::with_capacity(attempted);
+
+    for r in results {
+        match r.item.status.as_str() {
+            "ok" => count_ok += 1,
+            "skip_exists" => count_skip_exists += 1,
+            "dry_run" => count_dry_run += 1,
+            "ffmpeg_error" => count_ffmpeg_error += 1,
+            _ => {}
+        }
+        if r.ffprobe_failed {
+            count_ffprobe_failed += 1;
+        }
+        items.push(r.item);
     }
 
     if missing_input > 0 {
@@ -195,6 +330,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     // ─── parse_ffprobe_output ─────────────────────────────────────────────────────
 
@@ -287,5 +423,209 @@ mod tests {
         let wav_dir = Path::new("/tmp/ops15-test-wav");
         let p = output_wav_path(wav_dir, "file.with.dots.gsm");
         assert_eq!(p.file_name().unwrap(), "file.with.dots.wav");
+    }
+
+    // ─── OPS-17: validate_conversion_concurrency ─────────────────────────────────
+
+    #[test]
+    fn test_conversion_concurrency_default_is_two() {
+        assert_eq!(DEFAULT_CONVERSION_CONCURRENCY, 2);
+    }
+
+    #[test]
+    fn test_validate_conversion_concurrency_accepts_one() {
+        assert!(validate_conversion_concurrency(1).is_ok());
+    }
+
+    #[test]
+    fn test_validate_conversion_concurrency_accepts_default() {
+        assert!(validate_conversion_concurrency(DEFAULT_CONVERSION_CONCURRENCY).is_ok());
+    }
+
+    #[test]
+    fn test_validate_conversion_concurrency_rejects_zero() {
+        let err = validate_conversion_concurrency(0);
+        assert!(err.is_err(), "concurrency=0 must be rejected");
+        let msg = err.unwrap_err().to_string();
+        assert!(msg.contains("must be >= 1"), "error must mention minimum: {msg}");
+    }
+
+    // ─── OPS-17: convert_one (no ffmpeg required) ────────────────────────────────
+
+    #[test]
+    fn test_convert_one_dry_run_produces_dry_run_status() {
+        // dry_run=true with no out_path: status must be "dry_run", no output created.
+        let dir = std::env::temp_dir()
+            .join(format!("ops17_dryrun_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let in_path = dir.join("ops17-synthetic-input.gsm");
+        let out_path = dir.join("ops17-synthetic-output.wav");
+
+        let result = convert_one(0, "ops17-synthetic-001", &in_path, &out_path, 8000, 1, true);
+
+        assert_eq!(result.item.status, "dry_run");
+        assert_eq!(result.index, 0);
+        assert!(!result.item.ffprobe_ok, "dry_run must not invoke ffprobe");
+        assert!(result.item.duration_sec.is_none());
+        assert!(!result.ffprobe_failed);
+        assert!(!out_path.exists(), "dry_run must not create output file");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_convert_one_skip_exists_when_output_present() {
+        // When out_path already exists, skip_exists fires before dry_run or ffmpeg.
+        let dir = std::env::temp_dir()
+            .join(format!("ops17_skip_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let in_path = dir.join("ops17-synthetic-input.gsm");
+        let out_path = dir.join("ops17-synthetic-output.wav");
+        std::fs::write(&out_path, b"synthetic wav placeholder").unwrap();
+
+        // dry_run=false but out_path exists → skip_exists must fire before ffmpeg attempt
+        let result = convert_one(1, "ops17-synthetic-002", &in_path, &out_path, 8000, 1, false);
+
+        assert_eq!(result.item.status, "skip_exists",
+            "existing output must produce skip_exists regardless of dry_run flag");
+        assert_eq!(result.index, 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_convert_one_skip_exists_takes_priority_over_dry_run() {
+        // Even with dry_run=true, skip_exists fires first when out_path exists.
+        let dir = std::env::temp_dir()
+            .join(format!("ops17_skip_dryrun_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let in_path = dir.join("ops17-synthetic-input.gsm");
+        let out_path = dir.join("ops17-synthetic-output.wav");
+        std::fs::write(&out_path, b"synthetic wav placeholder").unwrap();
+
+        let result = convert_one(0, "ops17-synthetic-003", &in_path, &out_path, 8000, 1, true);
+
+        assert_eq!(result.item.status, "skip_exists");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ─── OPS-17: run_conversion_jobs ─────────────────────────────────────────────
+
+    fn test_logs() -> (Arc<str>, Arc<str>) {
+        (Arc::from("test-client"), Arc::from("2026-05-14"))
+    }
+
+    #[test]
+    fn test_run_conversion_jobs_empty_returns_empty() {
+        let (cl, dl) = test_logs();
+        let results = run_conversion_jobs(vec![], false, 2, cl, dl);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_run_conversion_jobs_dry_run_all_produce_dry_run_status() {
+        // dry_run=true, no out_paths exist → all items must have status "dry_run".
+        let (cl, dl) = test_logs();
+        let dir = std::env::temp_dir()
+            .join(format!("ops17_jobs_dryrun_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let n = 5usize;
+        let jobs: Vec<ConversionJob> = (0..n).map(|i| ConversionJob {
+            index: i,
+            record_id: format!("ops17-dr-{:03}", i),
+            in_path: dir.join(format!("ops17-in-{:03}.gsm", i)),
+            out_path: dir.join(format!("ops17-out-{:03}.wav", i)),
+            sample_rate: 8000,
+            channels: 1,
+        }).collect();
+
+        let results = run_conversion_jobs(jobs, true, 2, cl, dl);
+
+        assert_eq!(results.len(), n);
+        for r in &results {
+            assert_eq!(r.item.status, "dry_run",
+                "index {} must have dry_run status", r.index);
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_run_conversion_jobs_deterministic_order_concurrent_workers() {
+        // With concurrency > 1, worker completion order is non-deterministic.
+        // Results must match discovery order (by index) after sort-by-index.
+        let (cl, dl) = test_logs();
+        let dir = std::env::temp_dir()
+            .join(format!("ops17_order_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let filenames = [
+            "ops17-zebra.gsm",
+            "ops17-alpha.gsm",
+            "ops17-middle.gsm",
+            "ops17-delta.gsm",
+            "ops17-echo.gsm",
+            "ops17-foxtrot.gsm",
+        ];
+        let jobs: Vec<ConversionJob> = filenames.iter().enumerate().map(|(i, name)| ConversionJob {
+            index: i,
+            record_id: format!("ops17-order-{:03}", i),
+            in_path: dir.join(name),
+            out_path: dir.join(name.replace(".gsm", ".wav")),
+            sample_rate: 8000,
+            channels: 1,
+        }).collect();
+
+        // concurrency=4 so multiple workers compete, producing non-deterministic channel
+        // arrival order. sort-by-index must restore discovery order.
+        let results = run_conversion_jobs(jobs, true, 4, cl, dl);
+
+        assert_eq!(results.len(), filenames.len());
+        for (i, r) in results.iter().enumerate() {
+            assert_eq!(r.index, i, "result[{i}].index must equal {i} (stable ordering)");
+            assert_eq!(r.item.status, "dry_run");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_run_conversion_jobs_skip_existing_output() {
+        // When out_path already exists for a job, status must be skip_exists.
+        let (cl, dl) = test_logs();
+        let dir = std::env::temp_dir()
+            .join(format!("ops17_skip_existing_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let out_path = dir.join("ops17-existing.wav");
+        std::fs::write(&out_path, b"synthetic wav placeholder").unwrap();
+
+        let jobs = vec![ConversionJob {
+            index: 0,
+            record_id: "ops17-skip-001".to_string(),
+            in_path: dir.join("ops17-existing.gsm"),
+            out_path: out_path.clone(),
+            sample_rate: 8000,
+            channels: 1,
+        }];
+
+        let results = run_conversion_jobs(jobs, false, 1, cl, dl);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].item.status, "skip_exists");
+        assert_eq!(results[0].index, 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

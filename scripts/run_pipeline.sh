@@ -1,0 +1,372 @@
+#!/usr/bin/env bash
+# scripts/run_pipeline.sh — operational runner for audios-natura-v2
+# Three explicit SFTP modes: real (production), test (synthetic), dry-run (no SFTP).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
+IMG_FETCHER="localhost/audios-natura/audio-fetcher-rs:dev"
+IMG_CONVERTER="localhost/audios-natura/audio-converter-rs:dev"
+IMG_MATCHER="localhost/audios-natura/metadata-matcher-rs:dev"
+IMG_UPLOADER="localhost/audios-natura/audio-uploader-go:dev"
+IMG_PIPELINE="localhost/audios-natura/pipeline-runner:dev"
+
+MSSQL_SECRET="${MSSQL_SECRET:-mssql-env-v2}"
+SFTP_SECRET="${SFTP_SECRET:-sftp-env}"
+REAL_SFTP_SECRET_MOUNT="/run/secrets/sftp-env"
+
+print_usage() {
+    cat <<'EOF'
+Usage: scripts/run_pipeline.sh --sftp-mode <real|test|dry-run> [OPTIONS]
+
+SFTP mode (required):
+  --sftp-mode real       Live production SFTP. Requires work-netns running and
+                         the sftp-env Podman secret registered.
+  --sftp-mode test       Test SFTP using a synthetic credential file. Requires
+                         --test-sftp-env <path>. Refuses production secret paths.
+  --sftp-mode dry-run    No SFTP. Stages run in dry-run mode: no downloads,
+                         no conversions, no SFTP connections.
+
+Date selection (one required):
+  --date YYYY-MM-DD            Process a single date.
+  --start YYYY-MM-DD           Start of date range (inclusive). Requires --end.
+  --end   YYYY-MM-DD           End of date range (inclusive). Requires --start.
+
+Client:
+  --client <maf|natura|all>    Clients to process. Default: all.
+
+Pipeline mode (stages):
+  --mode <full|fetch|convert|match|upload>    Default: full.
+    full     Run complete pipeline via pipeline-runner (recommended).
+    fetch    Run audio-fetcher-rs only.
+    convert  Run audio-converter-rs only.
+    match    Run fetcher + converter + metadata-matcher-rs.
+    upload   Run audio-uploader-go only.
+
+Build:
+  --build    Rebuild all images before running.
+
+Test SFTP:
+  --test-sftp-env <path>    Synthetic SFTP env file (required for --sftp-mode test).
+                            Must not be a production secret path.
+
+  --help    Show this help.
+
+Examples:
+  # Dry-run for a single date:
+  scripts/run_pipeline.sh --sftp-mode dry-run --client natura --date 2026-05-14
+
+  # Test SFTP with synthetic credentials:
+  scripts/run_pipeline.sh --sftp-mode test --test-sftp-env /tmp/my-test-sftp.env \
+    --client maf --date 2026-05-14
+
+  # Real production run (requires work-netns running and sftp-env Podman secret):
+  scripts/run_pipeline.sh --sftp-mode real --client all \
+    --start 2026-05-01 --end 2026-05-14
+
+  # Rebuild images then run:
+  scripts/run_pipeline.sh --sftp-mode dry-run --date 2026-05-14 --build
+EOF
+}
+
+usage() { print_usage >&2; exit 1; }
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+# ---- Argument parsing ----
+SFTP_MODE=""
+CLIENT="all"
+DATE=""
+START_DATE=""
+END_DATE=""
+PIPELINE_MODE="full"
+BUILD=0
+TEST_SFTP_ENV=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --sftp-mode)     SFTP_MODE="$2";       shift 2 ;;
+        --client)        CLIENT="$2";          shift 2 ;;
+        --date)          DATE="$2";            shift 2 ;;
+        --start)         START_DATE="$2";      shift 2 ;;
+        --end)           END_DATE="$2";        shift 2 ;;
+        --mode)          PIPELINE_MODE="$2";   shift 2 ;;
+        --build)         BUILD=1;              shift   ;;
+        --test-sftp-env) TEST_SFTP_ENV="$2";  shift 2 ;;
+        --help|-h)       print_usage; exit 0 ;;
+        *) die "Unknown option: $1. Use --help for usage." ;;
+    esac
+done
+
+# ---- Validation ----
+
+[[ -z "$SFTP_MODE" ]] && die "--sftp-mode is required (real|test|dry-run). Use --help for usage."
+
+case "$SFTP_MODE" in
+    real|test|dry-run) ;;
+    *) die "--sftp-mode must be real, test, or dry-run; got: '$SFTP_MODE'" ;;
+esac
+
+case "$CLIENT" in
+    maf|natura|all) ;;
+    *) die "--client must be maf, natura, or all; got: '$CLIENT'" ;;
+esac
+
+case "$PIPELINE_MODE" in
+    full|fetch|convert|match|upload) ;;
+    *) die "--mode must be full|fetch|convert|match|upload; got: '$PIPELINE_MODE'" ;;
+esac
+
+DATE_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+
+if [[ -n "$DATE" && (-n "$START_DATE" || -n "$END_DATE") ]]; then
+    die "--date cannot be combined with --start/--end."
+fi
+
+if [[ -z "$DATE" && -z "$START_DATE" && -z "$END_DATE" ]]; then
+    die "Provide --date or --start/--end. Use --help for usage."
+fi
+
+if [[ -n "$DATE" ]]; then
+    [[ "$DATE" =~ $DATE_RE ]] || die "--date must be YYYY-MM-DD; got: '$DATE'"
+    START_DATE="$DATE"
+    END_DATE="$DATE"
+else
+    [[ -n "$START_DATE" ]] || die "--start is required when using date range."
+    [[ -n "$END_DATE"   ]] || die "--end is required when using date range."
+    [[ "$START_DATE" =~ $DATE_RE ]] || die "--start must be YYYY-MM-DD; got: '$START_DATE'"
+    [[ "$END_DATE"   =~ $DATE_RE ]] || die "--end must be YYYY-MM-DD; got: '$END_DATE'"
+    [[ "$START_DATE" > "$END_DATE" ]] && \
+        die "--start ($START_DATE) must not be after --end ($END_DATE)."
+fi
+
+# SFTP mode-specific validation
+
+if [[ "$SFTP_MODE" == "test" ]]; then
+    [[ -z "$TEST_SFTP_ENV" ]] && \
+        die "--sftp-mode test requires --test-sftp-env <path>. Provide a synthetic SFTP credential file."
+
+    # Refuse production secret paths.
+    ABS_TEST_SFTP_ENV="$(realpath -m "$TEST_SFTP_ENV" 2>/dev/null || echo "$TEST_SFTP_ENV")"
+    ABS_REAL_SECRET="$(realpath -m "$REPO_ROOT/secrets/sftp.env" 2>/dev/null || echo "$REPO_ROOT/secrets/sftp.env")"
+
+    if [[ "$ABS_TEST_SFTP_ENV" == "$REAL_SFTP_SECRET_MOUNT" || \
+          "$ABS_TEST_SFTP_ENV" == "$ABS_REAL_SECRET" ]]; then
+        die "--test-sftp-env '$TEST_SFTP_ENV' is a production secret path. " \
+            "Test mode must use a synthetic credential file, not a real secret."
+    fi
+
+    [[ -f "$TEST_SFTP_ENV" ]] || \
+        die "--test-sftp-env '$TEST_SFTP_ENV': file not found."
+fi
+
+if [[ "$SFTP_MODE" == "real" ]]; then
+    if ! podman inspect -f '{{.State.Running}}' work-netns 2>/dev/null | grep -qx true; then
+        die "work-netns container is not running. Real SFTP mode requires VPN namespace. " \
+            "Start work-netns before running with --sftp-mode real."
+    fi
+fi
+
+# ---- Build images ----
+
+if [[ "$BUILD" -eq 1 ]]; then
+    echo "Building images..."
+    podman build -t "$IMG_FETCHER"   -f audio-fetcher-rs/Containerfile .
+    podman build -t "$IMG_CONVERTER" -f audio-converter-rs/Containerfile .
+    podman build -t "$IMG_MATCHER"   -f metadata-matcher-rs/Containerfile .
+    podman build -t "$IMG_UPLOADER"  -f audio-uploader-go/Containerfile .
+    podman build -t "$IMG_PIPELINE"  -f pipeline-runner/Containerfile .
+    echo ""
+fi
+
+# ---- Image existence check ----
+
+check_image() {
+    local img="$1"
+    if ! podman image exists "$img" 2>/dev/null; then
+        die "Image not found: $img. Run with --build to build images first."
+    fi
+}
+
+case "$PIPELINE_MODE" in
+    full)    check_image "$IMG_PIPELINE" ;;
+    fetch)   check_image "$IMG_FETCHER" ;;
+    convert) check_image "$IMG_CONVERTER" ;;
+    match)   check_image "$IMG_FETCHER"; check_image "$IMG_CONVERTER"; check_image "$IMG_MATCHER" ;;
+    upload)  check_image "$IMG_UPLOADER" ;;
+esac
+
+# ---- Client list ----
+
+if [[ "$CLIENT" == "all" ]]; then
+    CLIENTS=("maf" "natura")
+else
+    CLIENTS=("$CLIENT")
+fi
+
+# ---- Summary ----
+
+echo "=== run_pipeline.sh ==="
+echo "  sftp-mode  : $SFTP_MODE"
+echo "  client(s)  : ${CLIENTS[*]}"
+echo "  date range : $START_DATE — $END_DATE"
+echo "  mode       : $PIPELINE_MODE"
+[[ "$SFTP_MODE" == "test" ]] && echo "  test-env   : $TEST_SFTP_ENV"
+echo ""
+
+mkdir -p logs shared/runs
+
+NET_REAL="container:work-netns"
+VOL_SHARED="$(pwd)/shared:/shared:Z"
+
+# ---- Stage runner helpers ----
+
+# run_full: uses pipeline-runner image (all stages).
+run_full() {
+    local client="$1" d="$2" run_id="$3"
+    case "$SFTP_MODE" in
+        real)
+            podman run --rm \
+                --network "$NET_REAL" \
+                -v "$VOL_SHARED" \
+                --secret "${MSSQL_SECRET},type=mount" \
+                --secret "${SFTP_SECRET},type=mount" \
+                -e RUST_LOG=info \
+                "$IMG_PIPELINE" \
+                    --client "$client" --date "$d" --run-id "$run_id"
+            ;;
+        test)
+            podman run --rm \
+                --network "$NET_REAL" \
+                -v "$VOL_SHARED" \
+                -v "${TEST_SFTP_ENV}:/run/secrets/test-sftp-env:Z,ro" \
+                --secret "${MSSQL_SECRET},type=mount" \
+                -e RUST_LOG=info \
+                "$IMG_PIPELINE" \
+                    --client "$client" --date "$d" --run-id "$run_id" \
+                    --sftp-secret-path /run/secrets/test-sftp-env
+            ;;
+        dry-run)
+            podman run --rm \
+                -v "$VOL_SHARED" \
+                -e RUST_LOG=info \
+                "$IMG_PIPELINE" \
+                    --client "$client" --date "$d" --run-id "$run_id" \
+                    --dry-run
+            ;;
+    esac
+}
+
+# run_fetch: audio-fetcher-rs only.
+run_fetch() {
+    local client="$1" d="$2" run_id="$3"
+    local dry_flag=()
+    [[ "$SFTP_MODE" == "dry-run" ]] && dry_flag=(--dry-run)
+    podman run --rm \
+        --network "$NET_REAL" \
+        -v "$VOL_SHARED" \
+        -e RUST_LOG=info \
+        "$IMG_FETCHER" \
+            --client "$client" --date "$d" --run-id "$run_id" \
+            "${dry_flag[@]+"${dry_flag[@]}"}"
+}
+
+# run_convert: audio-converter-rs only.
+run_convert() {
+    local client="$1" d="$2" run_id="$3"
+    local dry_flag=()
+    [[ "$SFTP_MODE" == "dry-run" ]] && dry_flag=(--dry-run)
+    podman run --rm \
+        --network "$NET_REAL" \
+        -v "$VOL_SHARED" \
+        -e RUST_LOG=info \
+        "$IMG_CONVERTER" \
+            --client "$client" --date "$d" --run-id "$run_id" \
+            "${dry_flag[@]+"${dry_flag[@]}"}"
+}
+
+# run_match: fetcher + converter + metadata-matcher-rs.
+run_match() {
+    local client="$1" d="$2" run_id="$3"
+    local dry_flag=()
+    [[ "$SFTP_MODE" == "dry-run" ]] && dry_flag=(--dry-run)
+    run_fetch "$client" "$d" "$run_id"
+    run_convert "$client" "$d" "$run_id"
+    podman run --rm \
+        --network "$NET_REAL" \
+        -v "$VOL_SHARED" \
+        --secret "${MSSQL_SECRET},type=mount" \
+        -e RUST_LOG=info \
+        "$IMG_MATCHER" \
+            --client "$client" --date "$d" --run-id "$run_id" \
+            "${dry_flag[@]+"${dry_flag[@]}"}"
+}
+
+# run_upload: audio-uploader-go only.
+run_upload() {
+    local client="$1" d="$2" run_id="$3"
+    case "$SFTP_MODE" in
+        real)
+            podman run --rm \
+                --network "$NET_REAL" \
+                -v "$VOL_SHARED" \
+                --secret "${SFTP_SECRET},type=mount" \
+                -e RUST_LOG=info \
+                "$IMG_UPLOADER" \
+                    --client "$client" --date "$d" --run-id "$run_id"
+            ;;
+        test)
+            podman run --rm \
+                --network "$NET_REAL" \
+                -v "$VOL_SHARED" \
+                -v "${TEST_SFTP_ENV}:/run/secrets/test-sftp-env:Z,ro" \
+                -e RUST_LOG=info \
+                "$IMG_UPLOADER" \
+                    --client "$client" --date "$d" --run-id "$run_id" \
+                    --sftp-secret-path /run/secrets/test-sftp-env
+            ;;
+        dry-run)
+            podman run --rm \
+                -v "$VOL_SHARED" \
+                -e RUST_LOG=info \
+                "$IMG_UPLOADER" \
+                    --client "$client" --date "$d" --run-id "$run_id" \
+                    --dry-run
+            ;;
+    esac
+}
+
+# ---- Main loop ----
+
+for client in "${CLIENTS[@]}"; do
+    d="$START_DATE"
+    while [[ "$d" < "$END_DATE" || "$d" == "$END_DATE" ]]; do
+        run_id="pipe_${client}_$(date -d "$d" +%Y%m%d)"
+        run_dir="shared/runs/$client/$d/$run_id"
+        log="logs/${client}_${d}_${SFTP_MODE}.log"
+
+        if [[ -d "$run_dir" ]]; then
+            echo "SKIP $client $d (exists: $run_dir)"
+            d=$(date -d "$d +1 day" +%F)
+            continue
+        fi
+
+        echo "RUN  $client $d sftp_mode=$SFTP_MODE pipeline_mode=$PIPELINE_MODE run_id=$run_id" \
+            | tee -a "$log"
+
+        case "$PIPELINE_MODE" in
+            full)    run_full    "$client" "$d" "$run_id" 2>&1 | tee -a "$log" ;;
+            fetch)   run_fetch   "$client" "$d" "$run_id" 2>&1 | tee -a "$log" ;;
+            convert) run_convert "$client" "$d" "$run_id" 2>&1 | tee -a "$log" ;;
+            match)   run_match   "$client" "$d" "$run_id" 2>&1 | tee -a "$log" ;;
+            upload)  run_upload  "$client" "$d" "$run_id" 2>&1 | tee -a "$log" ;;
+        esac
+
+        d=$(date -d "$d +1 day" +%F)
+    done
+done
+
+echo ""
+echo "Done."

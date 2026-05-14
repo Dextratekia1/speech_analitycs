@@ -86,29 +86,66 @@ Para verificar que esté corriendo:
 podman inspect -f '{{.State.Running}}' work-netns
 ```
 
-## Ejecución operativa (runs reales)
+## Ejecución operativa — scripts/run_pipeline.sh
 
-El script autorizado para ejecuciones operativas es:
+El script moderno para ejecuciones operativas y de prueba es:
 
 ```bash
-scripts/run_range.sh
+scripts/run_pipeline.sh --sftp-mode <real|test|dry-run> [OPTIONS]
 ```
 
-Utiliza `podman run` directo con `--network container:work-netns`, verifica que
-`work-netns` esté corriendo antes de proceder, y soporta rangos de fechas y múltiples
-clientes.
+### Modos SFTP
 
-Variables de control (todas opcionales con defaults):
+| Modo | Descripción |
+|---|---|
+| `real` | SFTP productivo. Requiere `work-netns` corriendo y el Podman secret `sftp-env`. |
+| `test` | SFTP con credenciales sintéticas. Requiere `--test-sftp-env <ruta>`. Rechaza rutas de secretos reales. |
+| `dry-run` | Sin SFTP. No descarga, no convierte, no sube. Genera manifests y JSON preparado. |
+
+### Ejemplos
+
+```bash
+# Dry-run para una fecha:
+scripts/run_pipeline.sh --sftp-mode dry-run --client natura --date 2026-05-14
+
+# Test SFTP con credenciales sintéticas:
+scripts/run_pipeline.sh --sftp-mode test --test-sftp-env /tmp/test-sftp.env \
+  --client maf --date 2026-05-14
+
+# Run productivo (requiere work-netns y sftp-env secret):
+scripts/run_pipeline.sh --sftp-mode real --client all \
+  --start 2026-05-01 --end 2026-05-14
+
+# Reconstruir imágenes antes de ejecutar:
+scripts/run_pipeline.sh --sftp-mode dry-run --date 2026-05-14 --build
+```
+
+### Opciones principales
+
+```
+--sftp-mode <real|test|dry-run>     Modo SFTP (requerido).
+--client <maf|natura|all>           Cliente(s). Default: all.
+--date YYYY-MM-DD                   Fecha única.
+--start / --end YYYY-MM-DD          Rango de fechas (inclusivo, mutualmente exclusivo con --date).
+--mode <full|fetch|convert|match|upload>   Etapas a ejecutar. Default: full.
+--build                             Reconstruir imágenes antes de ejecutar.
+--test-sftp-env <ruta>              Archivo de credenciales SFTP sintéticas (requerido con --sftp-mode test).
+--help                              Mostrar ayuda.
+```
+
+Ver `scripts/run_pipeline.sh --help` para la referencia completa.
+
+## Ejecución operativa — scripts/run_range.sh (legacy)
+
+`scripts/run_range.sh` es el script heredado. Soporta `MODE=full` y `MODE=match`
+vía variables de entorno:
+
 ```bash
 START=2026-05-13 END=2026-05-13 MODE=full scripts/run_range.sh
 ```
-- `MODE=full` — ejecuta el pipeline completo (fetcher + converter + matcher + uploader).
-- `MODE=match` — ejecuta solo fetcher + converter + matcher (sin SFTP).
-- `BUILD=1` — reconstruye imágenes antes de ejecutar.
-- `NET_MODE` — sobreescribe el namespace de red (default: `container:work-netns`).
 
 `scripts/run_rangev2.sh` está obsoleto (deprecated) y no debe usarse para ejecuciones
-operativas. Usar únicamente `scripts/run_range.sh`.
+operativas. Usar `scripts/run_pipeline.sh` o `scripts/run_range.sh`.
 
 ## Comportamiento de skip y recuperación de runs fallidos
 

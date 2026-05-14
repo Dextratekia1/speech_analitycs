@@ -78,6 +78,9 @@ struct Args {
 
     #[arg(long, default_value = "config/clients")]
     clients_dir: String,
+
+    #[arg(long, default_value = "/run/secrets/sftp-env")]
+    sftp_secret_path: String,
 }
 
 fn make_pending_stage(name: &str, command: &str, manifest_path: &str) -> PipelineStage {
@@ -543,6 +546,8 @@ fn main() -> Result<()> {
             &args.shared_root,
             "--run-id",
             &run_id,
+            "--sftp-secret-path",
+            &args.sftp_secret_path,
         ]);
         if args.dry_run {
             c.arg("--dry-run");
