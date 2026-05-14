@@ -84,6 +84,9 @@ struct Args {
 
     #[arg(long)]
     conversion_concurrency: Option<usize>,
+
+    #[arg(long)]
+    run_label: Option<String>,
 }
 
 fn make_pending_stage(name: &str, command: &str, manifest_path: &str) -> PipelineStage {
@@ -406,6 +409,19 @@ fn summarize_match_counts(counts: Option<&Value>) -> Value {
     })
 }
 
+fn validate_run_label(label: &str) -> Result<()> {
+    if label.is_empty() || label.len() > 32 {
+        anyhow::bail!(
+            "run label must be 1-32 characters; got length {}",
+            label.len()
+        );
+    }
+    if !label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        anyhow::bail!("run label must contain only letters, digits, '-', or '_'");
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -414,9 +430,21 @@ fn main() -> Result<()> {
     let args = Args::parse();
     util::parse_date_ymd(&args.date)?;
 
+    if let Some(label) = &args.run_label {
+        validate_run_label(label).context("--run-label validation failed")?;
+    }
+    // When --run-id is explicit (script path), use it as-is (label already embedded).
+    // When auto-generating (direct invocation), append label suffix if provided.
+    let label_for_id = args.run_label.clone();
     let run_id = args
         .run_id
-        .unwrap_or_else(|| format!("{}", Utc::now().format("%Y%m%dT%H%M%SZ")));
+        .unwrap_or_else(|| {
+            let base = format!("{}", Utc::now().format("%Y%m%dT%H%M%SZ"));
+            match label_for_id {
+                Some(label) => format!("{base}_{label}"),
+                None => base,
+            }
+        });
 
     let shared_root = PathBuf::from(&args.shared_root);
     let run_dir = paths::run_dir(

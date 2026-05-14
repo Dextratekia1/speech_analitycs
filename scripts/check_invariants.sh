@@ -376,6 +376,25 @@ check_present \
 echo ""
 
 # ==========================================================================
+echo "--- [13] OPS-20 run label anchors ---"
+# Verify --run-label is wired in run_pipeline.sh, pipeline-runner, and documented in README.
+check_present \
+    "--run-label present in scripts/run_pipeline.sh" \
+    "run.label" \
+    "scripts/run_pipeline.sh"
+
+check_present \
+    "run_label present in pipeline-runner/src/main.rs" \
+    "run.label" \
+    "pipeline-runner/src/main.rs"
+
+check_present \
+    "--run-label documented in README.md" \
+    "run.label" \
+    "README.md"
+echo ""
+
+# ==========================================================================
 echo "--- Summary ---"
 if [[ "$failures" -eq 0 ]]; then
     echo "All checks PASSED (0 failures)."

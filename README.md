@@ -131,10 +131,38 @@ scripts/run_pipeline.sh --sftp-mode dry-run --date 2026-05-14 --build
 --build                             Reconstruir imágenes antes de ejecutar.
 --test-sftp-env <ruta>              Archivo de credenciales SFTP sintéticas (requerido con --sftp-mode test).
 --conversion-concurrency <N>        Override de concurrencia de audio-converter-rs (default: 2). N ≥ 1.
+--run-label <LABEL>                 Etiqueta opcional para el run ID (ej: 'cc4'). Permite runs
+                                    repetidos para el mismo cliente/fecha sin sobreescribir resultados
+                                    previos. 1-32 chars: letras, dígitos, '-', '_'. Sin barras ni PII.
 --help                              Mostrar ayuda.
 ```
 
 Ver `scripts/run_pipeline.sh --help` para la referencia completa.
+
+### Benchmarks repetidos — --run-label
+
+`--run-label` permite ejecutar el pipeline múltiples veces para el mismo cliente/fecha sin sobreescribir
+artefactos de runs previos. El label se añade al run ID:
+
+```
+pipe_maf_20260513_cc4       ← con --run-label cc4
+pipe_natura_20260513_cc4
+```
+
+**Ejemplo: benchmark de concurrencia sobre la misma fecha**
+
+```bash
+scripts/run_pipeline.sh \
+  --client all \
+  --date 2026-05-13 \
+  --sftp-mode test \
+  --test-sftp-env "$TEST_ENV" \
+  --conversion-concurrency 4 \
+  --run-label cc4 \
+  --build
+```
+
+Labels válidos: letras, dígitos, `-`, `_`, máximo 32 caracteres. No deben contener rutas ni PII.
 
 ## Servidor SFTP de prueba — scripts/start_test_sftp.sh
 

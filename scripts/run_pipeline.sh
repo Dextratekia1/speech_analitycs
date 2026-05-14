@@ -56,6 +56,13 @@ Conversion concurrency:
   --conversion-concurrency <N>    Override audio-converter-rs thread pool size (default: 2).
                                   N must be a positive integer (≥ 1).
 
+Run label:
+  --run-label <LABEL>    Optional label appended to the run ID (e.g. 'cc4').
+                         Allows repeated runs for the same client/date without
+                         overwriting previous results. 1-32 chars: letters,
+                         digits, '-', '_'. No slashes, spaces, or special chars.
+                         Labels must not contain paths or PII.
+
   --help    Show this help.
 
 Examples:
@@ -89,6 +96,7 @@ PIPELINE_MODE="full"
 BUILD=0
 TEST_SFTP_ENV=""
 CONVERSION_CONCURRENCY=""
+RUN_LABEL=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -101,6 +109,7 @@ while [[ $# -gt 0 ]]; do
         --build)         BUILD=1;              shift   ;;
         --test-sftp-env)           TEST_SFTP_ENV="$2";           shift 2 ;;
         --conversion-concurrency)  CONVERSION_CONCURRENCY="$2";  shift 2 ;;
+        --run-label)               RUN_LABEL="$2";                shift 2 ;;
         --help|-h)       print_usage; exit 0 ;;
         *) die "Unknown option: $1. Use --help for usage." ;;
     esac
@@ -184,6 +193,17 @@ fi
 CC_ARGS=()
 [[ -n "$CONVERSION_CONCURRENCY" ]] && CC_ARGS=(--conversion-concurrency "$CONVERSION_CONCURRENCY")
 
+# Run label validation: safe token before any container starts.
+LABEL_SUFFIX=""
+if [[ -n "$RUN_LABEL" ]]; then
+    [[ "$RUN_LABEL" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || \
+        die "--run-label must be 1-32 chars (letters, digits, '-' or '_'); got: '$RUN_LABEL'"
+    LABEL_SUFFIX="_${RUN_LABEL}"
+fi
+# Run label forwarding args for pipeline-runner (defense-in-depth).
+RUN_LABEL_ARGS=()
+[[ -n "$RUN_LABEL" ]] && RUN_LABEL_ARGS=(--run-label "$RUN_LABEL")
+
 # ---- Build images ----
 
 if [[ "$BUILD" -eq 1 ]]; then
@@ -230,6 +250,7 @@ echo "  date range : $START_DATE — $END_DATE"
 echo "  mode       : $PIPELINE_MODE"
 [[ "$SFTP_MODE" == "test" ]] && echo "  test-env   : $TEST_SFTP_ENV"
 [[ -n "$CONVERSION_CONCURRENCY" ]] && echo "  concurrency: $CONVERSION_CONCURRENCY"
+[[ -n "$RUN_LABEL" ]] && echo "  run-label  : $RUN_LABEL"
 echo ""
 
 mkdir -p logs shared/runs
@@ -252,7 +273,8 @@ run_full() {
                 -e RUST_LOG=info \
                 "$IMG_PIPELINE" \
                     --client "$client" --date "$d" --run-id "$run_id" \
-                    "${CC_ARGS[@]+"${CC_ARGS[@]}"}"
+                    "${CC_ARGS[@]+"${CC_ARGS[@]}"}" \
+                    "${RUN_LABEL_ARGS[@]+"${RUN_LABEL_ARGS[@]}"}"
             ;;
         test)
             podman run --rm \
@@ -264,7 +286,8 @@ run_full() {
                 "$IMG_PIPELINE" \
                     --client "$client" --date "$d" --run-id "$run_id" \
                     --sftp-secret-path /run/secrets/test-sftp-env \
-                    "${CC_ARGS[@]+"${CC_ARGS[@]}"}"
+                    "${CC_ARGS[@]+"${CC_ARGS[@]}"}" \
+                    "${RUN_LABEL_ARGS[@]+"${RUN_LABEL_ARGS[@]}"}"
             ;;
         dry-run)
             podman run --rm \
@@ -273,7 +296,8 @@ run_full() {
                 "$IMG_PIPELINE" \
                     --client "$client" --date "$d" --run-id "$run_id" \
                     --dry-run \
-                    "${CC_ARGS[@]+"${CC_ARGS[@]}"}"
+                    "${CC_ARGS[@]+"${CC_ARGS[@]}"}" \
+                    "${RUN_LABEL_ARGS[@]+"${RUN_LABEL_ARGS[@]}"}"
             ;;
     esac
 }
@@ -363,7 +387,7 @@ run_upload() {
 for client in "${CLIENTS[@]}"; do
     d="$START_DATE"
     while [[ "$d" < "$END_DATE" || "$d" == "$END_DATE" ]]; do
-        run_id="pipe_${client}_$(date -d "$d" +%Y%m%d)"
+        run_id="pipe_${client}_$(date -d "$d" +%Y%m%d)${LABEL_SUFFIX}"
         run_dir="shared/runs/$client/$d/$run_id"
         log="logs/${client}_${d}_${SFTP_MODE}.log"
 
