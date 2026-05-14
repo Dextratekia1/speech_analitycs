@@ -58,11 +58,14 @@ sha256sum /tmp/pipeline-runner-git-<sha7>.tar.gz
 
 ## Load on production host
 
+**Run as `useraval` — rootless Podman, no sudo.**
+
 ```bash
-# On production host (as root or audios-natura user):
 podman load < /tmp/pipeline-runner-git-<sha7>.tar.gz
 podman images localhost/audios-natura/pipeline-runner
 ```
+
+> **Warning:** If loaded with `sudo podman load`, the `useraval` rootless service will **not** see the image. Always load as `useraval`.
 
 Confirm `:release` tag is present and shows the new SHA. The `:git-<previous-sha7>` tag
 from the prior release is retained automatically for rollback.
@@ -97,8 +100,8 @@ python3 -m json.tool \
 
 **Initial deployment (timer not yet enabled):**
 ```bash
-systemctl enable --now audios-natura-pipeline.timer
-systemctl enable --now audios-natura-cleanup.timer
+systemctl --user enable --now audios-natura-pipeline.timer
+systemctl --user enable --now audios-natura-cleanup.timer
 ```
 
 **Subsequent releases:** No timer restart needed. The next scheduled run picks up the
@@ -106,7 +109,7 @@ new `:release` image automatically (`Type=oneshot`).
 
 Verify:
 ```bash
-systemctl list-timers audios-natura-pipeline.timer
+systemctl --user list-timers audios-natura-pipeline.timer
 ```
 
 ---

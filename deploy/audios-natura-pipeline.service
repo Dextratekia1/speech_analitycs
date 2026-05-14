@@ -1,7 +1,5 @@
 [Unit]
 Description=Audios natura daily pipeline run (production)
-After=network-online.target
-Wants=network-online.target
 Documentation=file:///opt/audios-natura/DEPLOY.md
 
 [Service]

@@ -335,7 +335,7 @@ podman secret create sftp-env     ./secrets/sftp.env
 ## Deployment en producción
 
 Ver [DEPLOY.md](DEPLOY.md) para instrucciones completas de despliegue en Fedora CoreOS:
-systemd service/timer, imágenes release, secretos Podman, retención de artefactos y rollback.
+systemd user-level service/timer (rootless, `useraval`, `systemctl --user`), imágenes release, secretos Podman, retención de artefactos y rollback.
 
 - `scripts/build_release.sh` — construye, etiqueta y exporta la imagen release (archivo en `dist/`).
 - `deploy/release_checklist.md` — checklist del operador para releases a producción.

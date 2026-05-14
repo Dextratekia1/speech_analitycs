@@ -6,7 +6,7 @@ Fedora CoreOS deployment guide for the audios-natura-v2 daily pipeline.
 
 ## 1. Production Architecture Summary
 
-- **Runtime:** Podman containers, rootful systemd service.
+- **Runtime:** Podman containers, rootless user-level systemd service (user: `useraval`).
 - **Image:** Single monolithic release image (`pipeline-runner/Containerfile`) containing all five pipeline binaries and `ffmpeg`.
 - **Scheduling:** `Type=oneshot` systemd service triggered by a daily timer at 22:00 local time.
 - **Network:** No `work-netns` required. The production server is already on the company network. Containers use the host network directly (`PIPELINE_NETWORK_MODE=default`).
@@ -18,7 +18,7 @@ Fedora CoreOS deployment guide for the audios-natura-v2 daily pipeline.
 ## 2. Host Filesystem Layout
 
 ```
-/opt/audios-natura/                    (deployment root)
+/opt/audios-natura/                    (deployment root — owned by useraval)
   scripts/
     run_pipeline.sh                    (operational runner)
     run_production.sh                  (production daily wrapper)
@@ -41,16 +41,16 @@ Fedora CoreOS deployment guide for the audios-natura-v2 daily pipeline.
   logs/                                (execution logs — not in git)
   DEPLOY.md                            (this file)
 
-/etc/audios-natura/
-  secrets/                             (chmod 700 — never commit)
-    mssql.env                          (chmod 600)
-    sftp.env                           (chmod 600)
-
-/etc/systemd/system/
-  audios-natura-pipeline.service
-  audios-natura-pipeline.timer
-  audios-natura-cleanup.service
-  audios-natura-cleanup.timer
+/home/useraval/.config/
+  systemd/user/
+    audios-natura-pipeline.service     (user-level unit)
+    audios-natura-pipeline.timer       (user-level unit)
+    audios-natura-cleanup.service      (user-level unit)
+    audios-natura-cleanup.timer        (user-level unit)
+  audios-natura/
+    secrets/                           (chmod 700 — never commit)
+      mssql.env                        (chmod 600)
+      sftp.env                         (chmod 600)
 ```
 
 ---
@@ -92,7 +92,7 @@ podman tag "localhost/audios-natura/pipeline-runner:git-${SHA7}" \
 ```bash
 # Archive is in dist/ when using build_release.sh:
 scp dist/pipeline-runner-git-<sha7>.tar.gz production-host:/tmp/
-# On production host:
+# On production host — as useraval (rootless Podman, no sudo):
 podman load < /tmp/pipeline-runner-git-<sha7>.tar.gz
 podman images localhost/audios-natura/pipeline-runner
 ```
@@ -103,18 +103,23 @@ podman images localhost/audios-natura/pipeline-runner
 
 Secrets are never committed to git. See `secrets/*.env.example` for the required variable names.
 
-Create credential files on the production host:
+Create the secrets directory and credential files as `useraval`:
 
-```
-/etc/audios-natura/secrets/mssql.env   # MSSQL credentials
-/etc/audios-natura/secrets/sftp.env    # SFTP credentials and host key
-```
-
-File permissions:
 ```bash
-chmod 700 /etc/audios-natura/secrets
-chmod 600 /etc/audios-natura/secrets/mssql.env
-chmod 600 /etc/audios-natura/secrets/sftp.env
+mkdir -p ~/.config/audios-natura/secrets
+chmod 700 ~/.config/audios-natura/secrets
+```
+
+Place credential files (content from `secrets/*.env.example`):
+```
+~/.config/audios-natura/secrets/mssql.env   # MSSQL credentials
+~/.config/audios-natura/secrets/sftp.env    # SFTP credentials and host key
+```
+
+Set permissions:
+```bash
+chmod 600 ~/.config/audios-natura/secrets/mssql.env
+chmod 600 ~/.config/audios-natura/secrets/sftp.env
 ```
 
 **SFTP host key:** Set `SFTP_HOST_KEY` in `sftp.env` to the server's public key in OpenSSH `authorized_keys` format. Obtain it on a trusted network:
@@ -127,17 +132,21 @@ The uploader fails closed if `SFTP_HOST_KEY` is missing or the key does not matc
 
 ## 5. Podman Secret Commands
 
-Run once after provisioning the credential files:
+Run once after provisioning the credential files (as `useraval` — no sudo):
 ```bash
-podman secret create mssql-env-v2 /etc/audios-natura/secrets/mssql.env
-podman secret create sftp-env     /etc/audios-natura/secrets/sftp.env
+podman secret create mssql-env-v2 ~/.config/audios-natura/secrets/mssql.env
+podman secret create sftp-env     ~/.config/audios-natura/secrets/sftp.env
+podman secret ls
 ```
+
+Rootless Podman secrets are per-user. Secrets created with `sudo podman` are **not** visible to the `useraval` rootless service — always create secrets as `useraval` without sudo.
 
 **Rotation:** After updating credential files:
 ```bash
 podman secret rm mssql-env-v2 sftp-env
-podman secret create mssql-env-v2 /etc/audios-natura/secrets/mssql.env
-podman secret create sftp-env     /etc/audios-natura/secrets/sftp.env
+podman secret create mssql-env-v2 ~/.config/audios-natura/secrets/mssql.env
+podman secret create sftp-env     ~/.config/audios-natura/secrets/sftp.env
+podman secret ls
 ```
 The next scheduled run picks up new secrets automatically.
 
@@ -164,13 +173,23 @@ PIPELINE_NETWORK_MODE=default scripts/run_pipeline.sh --sftp-mode real ...
 
 ## 7. Install Steps
 
-Run from the repository root on the production host (requires root):
+**Admin pre-requisites (run once, as root/admin):**
+
+```bash
+sudo mkdir -p /opt/audios-natura
+sudo chown -R useraval:useraval /opt/audios-natura
+sudo loginctl enable-linger useraval
+```
+
+`loginctl enable-linger useraval` allows the `useraval` user-level systemd session to persist after logout so that timer-triggered pipeline runs work without an active login session.
+
+**Run the installer as `useraval`:**
 
 ```bash
 bash deploy/install.sh
 ```
 
-This creates directories, copies scripts and config, and installs systemd units. The timer is **not** enabled by default. Complete secret provisioning and image loading before enabling.
+This creates `/opt/audios-natura/` directories, copies scripts and config, and installs user-level systemd units under `~/.config/systemd/user/`. The timer is **not** enabled by default. Complete secret provisioning and image loading before enabling.
 
 ---
 
@@ -179,9 +198,9 @@ This creates directories, copies scripts and config, and installs systemd units.
 After completing §4 (secrets), §5 (Podman secrets), and loading the release image:
 
 ```bash
-systemctl enable --now audios-natura-pipeline.timer
-systemctl enable --now audios-natura-cleanup.timer
-systemctl list-timers audios-natura-pipeline.timer
+systemctl --user enable --now audios-natura-pipeline.timer
+systemctl --user enable --now audios-natura-cleanup.timer
+systemctl --user list-timers audios-natura-pipeline.timer
 ```
 
 The pipeline runs daily at 22:00 local time. `Persistent=true` fires any missed run at next boot.
@@ -275,14 +294,14 @@ The next timer fire or manual run uses the rolled-back image. No service restart
 
 **Check timer status:**
 ```bash
-systemctl status audios-natura-pipeline.timer
-systemctl list-timers audios-natura-pipeline.timer
+systemctl --user status audios-natura-pipeline.timer
+systemctl --user list-timers audios-natura-pipeline.timer
 ```
 
 **View service logs (no PII — safe):**
 ```bash
-journalctl -u audios-natura-pipeline.service -n 100
-journalctl -u audios-natura-pipeline.service --since today
+journalctl --user -u audios-natura-pipeline.service -n 100
+journalctl --user -u audios-natura-pipeline.service --since today
 ```
 
 **View aggregate pipeline status (no PII):**
@@ -303,8 +322,8 @@ grep -E 'RUN |SKIP |Done\.' /opt/audios-natura/logs/maf_2026-05-14_real.log
 
 **Stop/disable timer:**
 ```bash
-systemctl stop audios-natura-pipeline.timer
-systemctl disable audios-natura-pipeline.timer
+systemctl --user stop audios-natura-pipeline.timer
+systemctl --user disable audios-natura-pipeline.timer
 ```
 
 ---
@@ -323,14 +342,35 @@ systemctl disable audios-natura-pipeline.timer
 
 ---
 
-## 16. Rootless Podman Hardening (Future)
+## 16. Production User Setup
 
-The initial deployment uses rootful Podman (systemd runs as root). For hardening:
+This deployment runs rootless under `useraval`. The following one-time steps are required before running `deploy/install.sh`.
 
-1. Create a dedicated system user: `useradd -r -s /sbin/nologin audios-natura`
-2. Enable linger: `loginctl enable-linger audios-natura`
-3. Move unit files to user scope: `~audios-natura/.config/systemd/user/`
-4. Ensure Podman secrets are created under the `audios-natura` user context.
-5. Ensure the release image is imported under the `audios-natura` user context.
+**Create `/opt/audios-natura` and assign ownership (as root/admin):**
+```bash
+sudo mkdir -p /opt/audios-natura
+sudo chown -R useraval:useraval /opt/audios-natura
+```
 
-Rootless requires both the pipeline container and the `work-netns` container (if used) to be in the same Podman user context. Since production does not use `work-netns`, rootless hardening is straightforward.
+**Enable linger (as root/admin):**
+```bash
+sudo loginctl enable-linger useraval
+```
+
+`loginctl enable-linger useraval` allows the `useraval` user-level systemd session to persist after logout. Without linger, user-level timers only fire when `useraval` has an active login session.
+
+**Image store context:**
+
+Rootful and rootless Podman maintain separate image stores. The `useraval` service uses the rootless Podman store. Always load the release image as `useraval` (no sudo):
+
+```bash
+podman load < /tmp/pipeline-runner-git-<sha7>.tar.gz
+```
+
+> **Warning:** If the image is loaded with `sudo podman load`, the `useraval` rootless service will **not** see it.
+
+**Secret store context:**
+
+Rootless Podman secrets are per-user. Always create secrets as `useraval` without sudo. Secrets created with `sudo podman secret create` are **not** visible to the `useraval` rootless service.
+
+Since production does not use `work-netns`, rootless deployment is straightforward — no network namespace coordination is required.

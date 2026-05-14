@@ -454,8 +454,9 @@ check_present \
 echo ""
 
 # ==========================================================================
-echo "--- [16] OPS-D2 production deployment anchors ---"
+echo "--- [16] OPS-D2/D2B production deployment anchors ---"
 # Verify production deployment files exist and satisfy key safety constraints.
+# OPS-D2B adds rootless user-level systemd checks (useraval, systemctl --user).
 
 for _f in "scripts/run_production.sh" \
           "deploy/audios-natura-pipeline.service" \
@@ -539,6 +540,72 @@ check_present \
     "DEPLOY.md states no work-netns requirement in production" \
     "work-netns" \
     "DEPLOY.md"
+
+# OPS-D2B: Rootless user-level systemd checks
+check_absent \
+    "production service has no User= directive" \
+    "^User=" \
+    "deploy/audios-natura-pipeline.service"
+
+check_absent \
+    "production service has no Group= directive" \
+    "^Group=" \
+    "deploy/audios-natura-pipeline.service"
+
+check_absent \
+    "production service does not reference sudo" \
+    "sudo" \
+    "deploy/audios-natura-pipeline.service"
+
+check_present \
+    "deploy/install.sh installs to .config/systemd/user" \
+    "\.config/systemd/user" \
+    "deploy/install.sh"
+
+check_present \
+    "deploy/install.sh uses systemctl --user" \
+    "systemctl --user" \
+    "deploy/install.sh"
+
+check_absent \
+    "deploy/install.sh does not reference /etc/systemd/system" \
+    "/etc/systemd/system" \
+    "deploy/install.sh"
+
+check_absent \
+    "deploy/install.sh does not execute sudo" \
+    "^[[:space:]]*sudo[[:space:]]" \
+    "deploy/install.sh"
+
+check_present \
+    "DEPLOY.md mentions loginctl enable-linger" \
+    "loginctl enable-linger" \
+    "DEPLOY.md"
+
+check_present \
+    "DEPLOY.md uses rootless secret path (.config/audios-natura/secrets)" \
+    "\.config/audios-natura/secrets" \
+    "DEPLOY.md"
+
+check_present \
+    "DEPLOY.md mentions useraval" \
+    "useraval" \
+    "DEPLOY.md"
+
+check_absent \
+    "DEPLOY.md does not instruct sudo podman secret create (as command)" \
+    "^[[:space:]]*sudo podman secret" \
+    "DEPLOY.md"
+
+check_absent \
+    "DEPLOY.md does not instruct sudo podman load (as command)" \
+    "^[[:space:]]*sudo podman load" \
+    "DEPLOY.md"
+
+check_absent \
+    "release checklist does not instruct sudo podman load (as command)" \
+    "^[[:space:]]*sudo podman load" \
+    "deploy/release_checklist.md"
 
 echo ""
 
